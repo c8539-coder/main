@@ -1,20 +1,14 @@
-"""Building minimalist Discord embeds from NFT events."""
+"""Building small one-line sale notifications for Discord.
+
+Уведомление — обычное короткое сообщение (не большая карточка-embed),
+только о продажах. Текст на английском.
+"""
 
 from __future__ import annotations
 
-import datetime
 from typing import Optional
 
-import discord
-
 from .opensea import NftEvent
-
-# цвет полоски эмбеда по типу события (текст алертов — на английском)
-EVENT_STYLE = {
-    "sale": ("🟢", "Sale", discord.Color.from_str("#2ecc71")),
-    "listing": ("🔵", "Listing", discord.Color.from_str("#3498db")),
-}
-DEFAULT_STYLE = ("⚪", "Event", discord.Color.light_grey())
 
 # ссылки на обозреватели блокчейна по сети (chain-идентификаторы OpenSea)
 EXPLORERS = {
@@ -44,71 +38,34 @@ def _explorer_link(chain: str, tx_hash: Optional[str]) -> Optional[str]:
     return f"{base}{tx_hash}" if base else None
 
 
-def _fmt_price(event: NftEvent, usd: Optional[float]) -> Optional[str]:
+def _price_str(event: NftEvent, usd: Optional[float]) -> str:
     if event.price is None:
-        return None
+        return "?"
     symbol = (event.price_symbol or "ETH").upper()
-    if symbol in ("ETH", "WETH"):
-        head = f"Ξ {event.price:g}"
-    else:
-        head = f"{event.price:g} {symbol}"
+    head = f"Ξ{event.price:g}" if symbol in ("ETH", "WETH") else f"{event.price:g} {symbol}"
     if usd:
-        total = usd * event.price
-        head += f"  ·  ${total:,.0f}"
+        head += f" (${usd * event.price:,.0f})"
     return head
 
 
-def build_embed(
-    event: NftEvent,
-    meta: Optional[dict] = None,
-    usd_rate: Optional[float] = None,
-) -> discord.Embed:
-    icon, label, color = EVENT_STYLE.get(event.event_type, DEFAULT_STYLE)
+def build_message(event: NftEvent, usd_rate: Optional[float] = None) -> str:
+    """Собрать маленькое уведомление о продаже: одна-две короткие строки.
 
-    embed = discord.Embed(
-        title=event.nft_name[:256],
-        url=event.nft_url or None,
-        color=color,
-        timestamp=_utc_from_ts(event.timestamp),
-    )
+    Пример::
 
-    # шапка = коллекция (имя + иконка)
-    col_name = (meta or {}).get("name") or event.collection
-    col_icon = (meta or {}).get("image")
-    embed.set_author(
-        name=col_name[:256],
-        icon_url=col_icon or None,
-        url=f"https://opensea.io/collection/{event.collection}",
-    )
+        🟢 **Azuki #9605** sold for **Ξ14.2 ($39,760)**
+        `0x9f2a…c41d` → `0x1b7e…88af` · <https://etherscan.io/tx/0x…>
+    """
+    line1 = f"🟢 **{event.nft_name}** sold for **{_price_str(event, usd_rate)}**"
 
-    # компактное тело: событие, цена, участники
-    lines = [f"{icon} **{label}**"]
-    price_line = _fmt_price(event, usd_rate)
-    if price_line:
-        lines.append(f"**{price_line}**")
+    parts = []
+    if event.seller or event.buyer:
+        parts.append(f"`{_short_addr(event.seller)}` → `{_short_addr(event.buyer)}`")
+    # ссылку оборачиваем в <>, чтобы Discord не разворачивал большое превью
+    link = _explorer_link(event.chain, event.tx_hash) or event.nft_url
+    if link:
+        parts.append(f"<{link}>")
 
-    if event.event_type == "sale" and (event.seller or event.buyer):
-        lines.append(
-            f"`{_short_addr(event.seller)}` → `{_short_addr(event.buyer)}`"
-        )
-    elif event.seller:
-        lines.append(f"from `{_short_addr(event.seller)}`")
-
-    tx_link = _explorer_link(event.chain, event.tx_hash)
-    if tx_link:
-        lines.append(f"[View transaction]({tx_link})")
-
-    embed.description = "\n".join(lines)
-
-    if event.nft_image:
-        embed.set_thumbnail(url=event.nft_image)
-
-    embed.set_footer(text=f"OpenSea · {event.chain}")
-    return embed
-
-
-def _utc_from_ts(ts: int):
-    try:
-        return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
-    except (ValueError, OSError, OverflowError):
-        return datetime.datetime.now(tz=datetime.timezone.utc)
+    if not parts:
+        return line1
+    return f"{line1}\n" + " · ".join(parts)
