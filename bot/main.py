@@ -40,11 +40,11 @@ class NftAlertBot(discord.Client):
         self.opensea = OpenSeaClient(config.opensea_api_key)
         self.prices = PriceCache()
         self._poller: tasks.Loop | None = None
+        self._synced = False
 
     async def setup_hook(self) -> None:
         await self.storage.load()
         register_commands(self.tree, self)
-        await self.tree.sync()
         self._poller = tasks.loop(seconds=self.config.poll_interval_seconds)(
             self._poll_once
         )
@@ -62,7 +62,34 @@ class NftAlertBot(discord.Client):
 
     async def on_ready(self) -> None:
         log.info("Бот вошёл как %s (id=%s)", self.user, getattr(self.user, "id", "?"))
+        await self._sync_commands()
         log.info("Отслеживается коллекций: %d", len(self.storage.watched_collections()))
+
+    async def _sync_commands(self) -> None:
+        """Мгновенная регистрация команд на всех серверах бота.
+
+        Глобальная регистрация в Discord появляется до часа; регистрация в
+        конкретном сервере — сразу.
+        """
+        if self._synced:
+            return
+        self._synced = True
+        if not self.guilds:
+            log.warning(
+                "Бот не добавлен ни на один сервер — пригласи его по OAuth2-ссылке "
+                "(scopes: bot + applications.commands)."
+            )
+            return
+        try:
+            for guild in self.guilds:
+                self.tree.copy_global_to(guild=guild)
+                synced = await self.tree.sync(guild=guild)
+                log.info("Команды доступны на «%s» (%d шт.)", guild.name, len(synced))
+            # убрать глобальные команды от прошлых запусков, чтобы не было дублей
+            self.tree.clear_commands(guild=None)
+            await self.tree.sync()
+        except discord.HTTPException as exc:
+            log.warning("Не удалось зарегистрировать команды: %s", exc)
 
     # ---- poller ---------------------------------------------------------
 
