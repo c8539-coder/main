@@ -43,7 +43,7 @@ class Storage:
     def __init__(self, path: str) -> None:
         self._path = path
         self._lock = asyncio.Lock()
-        self._data: dict = {"subscriptions": {}, "cursors": {}}
+        self._data: dict = {"subscriptions": {}, "cursors": {}, "collections": {}}
         self._loaded = False
 
     # ---- disk I/O -------------------------------------------------------
@@ -56,10 +56,11 @@ class Storage:
                 self._data = {
                     "subscriptions": loaded.get("subscriptions", {}),
                     "cursors": loaded.get("cursors", {}),
+                    "collections": loaded.get("collections", {}),
                 }
             except (json.JSONDecodeError, OSError):
                 # повреждённый файл не должен ронять бота — начинаем с чистого
-                self._data = {"subscriptions": {}, "cursors": {}}
+                self._data = {"subscriptions": {}, "cursors": {}, "collections": {}}
         self._loaded = True
 
     def _save_sync(self) -> None:
@@ -152,6 +153,35 @@ class Storage:
                 )
             )
         return result
+
+    # ---- collection metadata -------------------------------------------
+
+    async def set_collection_meta(
+        self,
+        slug: str,
+        name: str,
+        image: Optional[str],
+        address: Optional[str],
+        chain: str,
+    ) -> None:
+        async with self._lock:
+            self._data["collections"][slug] = {
+                "name": name,
+                "image": image,
+                "address": (address or "").lower() or None,
+                "chain": chain,
+            }
+            await self._save()
+
+    def get_collection_meta(self, slug: str) -> Optional[dict]:
+        return self._data["collections"].get(slug)
+
+    def find_slug_by_address(self, address: str) -> Optional[str]:
+        target = address.strip().lower()
+        for slug, meta in self._data["collections"].items():
+            if (meta.get("address") or "").lower() == target:
+                return slug
+        return None
 
     # ---- cursors --------------------------------------------------------
 

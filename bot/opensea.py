@@ -30,6 +30,18 @@ class OpenSeaError(Exception):
 
 
 @dataclass
+class CollectionMeta:
+    """Метаданные коллекции для отображения в алертах."""
+
+    slug: str
+    name: str
+    image: Optional[str]
+    address: Optional[str]
+    chain: str
+    opensea_url: str
+
+
+@dataclass
 class NftEvent:
     """Нормализованное представление события OpenSea."""
 
@@ -116,6 +128,41 @@ class OpenSeaClient:
             return True
         except OpenSeaError:
             return False
+
+    async def get_contract(self, chain: str, address: str) -> dict:
+        """Метаданные NFT-контракта; в ответе есть slug коллекции."""
+        return await self._request(f"/chains/{chain}/contract/{address}")
+
+    async def resolve_collection(self, identifier: str, chain: str = "ethereum") -> "CollectionMeta":
+        """Принять адрес контракта (0x…) ИЛИ slug и вернуть метаданные коллекции.
+
+        Кидает OpenSeaError, если коллекция не найдена.
+        """
+        ident = identifier.strip()
+        if ident.lower().startswith("0x") and len(ident) >= 40:
+            contract = await self.get_contract(chain, ident)
+            slug = contract.get("collection")
+            if not slug:
+                raise OpenSeaError(
+                    f"У контракта {ident} на {chain} нет коллекции на OpenSea."
+                )
+        else:
+            slug = ident.lower()
+
+        col = await self.get_collection(slug)
+        contracts = col.get("contracts") or []
+        address = contracts[0].get("address") if contracts else (
+            ident if ident.lower().startswith("0x") else None
+        )
+        col_chain = contracts[0].get("chain") if contracts else chain
+        return CollectionMeta(
+            slug=slug,
+            name=col.get("name") or slug,
+            image=col.get("image_url"),
+            address=address,
+            chain=col_chain or chain,
+            opensea_url=f"https://opensea.io/collection/{slug}",
+        )
 
     async def fetch_events(
         self,

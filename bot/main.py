@@ -11,6 +11,7 @@ from discord.ext import tasks
 from .config import Config
 from .formatting import build_embed
 from .opensea import NftEvent, OpenSeaClient, OpenSeaError
+from .prices import PriceCache
 from .storage import Storage, Subscription
 
 log = logging.getLogger(__name__)
@@ -21,8 +22,17 @@ EVENT_TYPE_CHOICES = [
     app_commands.Choice(name="Всё (продажи + листинги)", value="all"),
 ]
 
-# сколько событий за один опрос максимум обрабатывать на коллекцию,
-# чтобы не залить канал при всплеске активности
+# сети OpenSea, между которыми можно выбирать
+CHAIN_CHOICES = [
+    app_commands.Choice(name="Ethereum", value="ethereum"),
+    app_commands.Choice(name="Polygon", value="matic"),
+    app_commands.Choice(name="Base", value="base"),
+    app_commands.Choice(name="Arbitrum", value="arbitrum"),
+    app_commands.Choice(name="Optimism", value="optimism"),
+    app_commands.Choice(name="Avalanche", value="avalanche"),
+]
+
+# максимум событий на коллекцию за один опрос, чтобы не залить канал при всплеске
 MAX_EVENTS_PER_POLL = 15
 
 
@@ -34,13 +44,13 @@ class NftAlertBot(discord.Client):
         self.tree = app_commands.CommandTree(self)
         self.storage = Storage(config.data_file)
         self.opensea = OpenSeaClient(config.opensea_api_key)
+        self.prices = PriceCache()
         self._poller: tasks.Loop | None = None
 
     async def setup_hook(self) -> None:
         await self.storage.load()
         register_commands(self.tree, self)
         await self.tree.sync()
-        # запускаем поллер с настроенным интервалом
         self._poller = tasks.loop(seconds=self.config.poll_interval_seconds)(
             self._poll_once
         )
@@ -58,14 +68,12 @@ class NftAlertBot(discord.Client):
 
     async def on_ready(self) -> None:
         log.info("Бот вошёл как %s (id=%s)", self.user, getattr(self.user, "id", "?"))
-        watched = self.storage.watched_collections()
-        log.info("Отслеживается коллекций: %d", len(watched))
+        log.info("Отслеживается коллекций: %d", len(self.storage.watched_collections()))
 
     # ---- poller ---------------------------------------------------------
 
     async def _poll_once(self) -> None:
-        collections = self.storage.watched_collections()
-        for slug in collections:
+        for slug in self.storage.watched_collections():
             try:
                 await self._poll_collection(slug)
             except OpenSeaError as exc:
@@ -74,14 +82,13 @@ class NftAlertBot(discord.Client):
                 log.exception("Неожиданная ошибка при опросе %s", slug)
 
     async def _poll_collection(self, slug: str) -> None:
-        cursor = self.storage.get_cursor(slug)
-        # какие типы событий вообще нужны кому-то из подписчиков
         subs = self.storage.subscribers_of(slug)
         if not subs:
             return
         wants_all = any(s.event_type == "all" for s in subs)
         event_type = "all" if wants_all else _common_event_type(subs)
 
+        cursor = self.storage.get_cursor(slug)
         events = await self.opensea.fetch_events(
             slug, event_type=event_type, after=cursor, limit=50
         )
@@ -98,30 +105,33 @@ class NftAlertBot(discord.Client):
             await self.storage.set_cursor(slug, max_ts)
 
     async def _dispatch_event(self, slug: str, event: NftEvent) -> None:
-        embed = build_embed(event)
+        meta = self.storage.get_collection_meta(slug)
+        usd = await self.prices.usd_for(event.price_symbol) if event.price else None
+        embed = build_embed(event, meta=meta, usd_rate=usd)
         for sub in self.storage.subscribers_of(slug):
             if not _event_matches(event, sub):
                 continue
-            channel = self.get_channel(sub.channel_id)
-            if channel is None:
-                try:
-                    channel = await self.fetch_channel(sub.channel_id)
-                except (discord.NotFound, discord.Forbidden):
-                    log.warning("Канал %s недоступен, пропускаю", sub.channel_id)
-                    continue
+            await self._send_to_channel(sub.channel_id, embed)
+
+    async def _send_to_channel(self, channel_id: int, embed: discord.Embed) -> None:
+        channel = self.get_channel(channel_id)
+        if channel is None:
             try:
-                await channel.send(embed=embed)
-            except discord.Forbidden:
-                log.warning("Нет прав писать в канал %s", sub.channel_id)
-            except discord.HTTPException as exc:
-                log.warning("Не удалось отправить сообщение: %s", exc)
+                channel = await self.fetch_channel(channel_id)
+            except (discord.NotFound, discord.Forbidden):
+                log.warning("Канал %s недоступен, пропускаю", channel_id)
+                return
+        try:
+            await channel.send(embed=embed)
+        except discord.Forbidden:
+            log.warning("Нет прав писать в канал %s", channel_id)
+        except discord.HTTPException as exc:
+            log.warning("Не удалось отправить сообщение: %s", exc)
 
 
 def _common_event_type(subs: list[Subscription]) -> str:
     types = {s.event_type for s in subs}
-    if len(types) == 1:
-        return next(iter(types))
-    return "all"
+    return next(iter(types)) if len(types) == 1 else "all"
 
 
 def _event_matches(event: NftEvent, sub: Subscription) -> bool:
@@ -138,52 +148,61 @@ def _event_matches(event: NftEvent, sub: Subscription) -> bool:
 def register_commands(tree: app_commands.CommandTree, bot: NftAlertBot) -> None:
     @tree.command(name="nft_watch", description="Отслеживать коллекцию NFT в этом канале")
     @app_commands.describe(
-        collection="Slug коллекции на OpenSea (из URL: opensea.io/collection/<slug>)",
+        collection="Адрес контракта коллекции (0x…) или slug с OpenSea",
+        chain="Сеть коллекции (по умолчанию Ethereum)",
         event_type="Какие события присылать (по умолчанию — продажи)",
-        min_price="Минимальная цена события, чтобы прислать алерт (в ETH/нативной валюте)",
+        min_price="Минимальная цена, чтобы прислать алерт (в ETH/нативной валюте)",
     )
-    @app_commands.choices(event_type=EVENT_TYPE_CHOICES)
+    @app_commands.choices(event_type=EVENT_TYPE_CHOICES, chain=CHAIN_CHOICES)
     async def nft_watch(
         interaction: discord.Interaction,
         collection: str,
+        chain: app_commands.Choice[str] | None = None,
         event_type: app_commands.Choice[str] | None = None,
         min_price: float | None = None,
     ) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
-        slug = collection.strip().lower()
+        chain_value = chain.value if chain else "ethereum"
         etype = event_type.value if event_type else "sale"
 
-        if not await bot.opensea.collection_exists(slug):
+        try:
+            meta = await bot.opensea.resolve_collection(collection, chain_value)
+        except OpenSeaError as exc:
             await interaction.followup.send(
-                f"❌ Коллекция `{slug}` не найдена на OpenSea.\n"
-                "Slug берётся из URL коллекции: "
-                "`opensea.io/collection/`**`<slug>`**",
+                f"❌ Не нашёл коллекцию по `{collection}` в сети `{chain_value}`.\n"
+                f"Детали: {exc}\n\n"
+                "Укажите **адрес контракта** (0x…) и правильную сеть, "
+                "либо slug из ссылки `opensea.io/collection/`**`<slug>`**.",
                 ephemeral=True,
             )
             return
 
         sub = Subscription(
             channel_id=interaction.channel_id,
-            collection=slug,
+            collection=meta.slug,
             event_type=etype,
             min_price=float(min_price or 0.0),
             added_by=interaction.user.id,
         )
         await bot.storage.add_subscription(sub)
+        await bot.storage.set_collection_meta(
+            meta.slug, meta.name, meta.image, meta.address, meta.chain
+        )
 
-        details = [f"тип: **{_etype_label(etype)}**"]
+        details = [f"тип: **{_etype_label(etype)}**", f"сеть: **{meta.chain}**"]
         if sub.min_price:
             details.append(f"мин. цена: **{sub.min_price:g}**")
+        addr = f"\nАдрес: `{meta.address}`" if meta.address else ""
         await interaction.followup.send(
-            f"✅ Теперь слежу за **{slug}** в этом канале ({', '.join(details)}).\n"
-            "Алерты придут при новых событиях.",
+            f"✅ Слежу за **{meta.name}** в этом канале ({', '.join(details)}).{addr}\n"
+            "Алерты придут при новых событиях. Проверить вид: `/nft_test`.",
             ephemeral=True,
         )
 
     @tree.command(name="nft_unwatch", description="Перестать отслеживать коллекцию в этом канале")
-    @app_commands.describe(collection="Slug коллекции, которую нужно убрать")
+    @app_commands.describe(collection="Адрес контракта (0x…) или slug коллекции")
     async def nft_unwatch(interaction: discord.Interaction, collection: str) -> None:
-        slug = collection.strip().lower()
+        slug = _to_slug(bot, collection)
         removed = await bot.storage.remove_subscription(interaction.channel_id, slug)
         if removed:
             await interaction.response.send_message(
@@ -207,34 +226,50 @@ def register_commands(tree: app_commands.CommandTree, bot: NftAlertBot) -> None:
             return
         lines = []
         for s in subs:
-            extra = [f"{_etype_label(s.event_type)}"]
+            meta = bot.storage.get_collection_meta(s.collection) or {}
+            name = meta.get("name") or s.collection
+            extra = [_etype_label(s.event_type)]
             if s.min_price:
                 extra.append(f"от {s.min_price:g}")
-            lines.append(f"• **{s.collection}** ({', '.join(extra)})")
+            addr = meta.get("address")
+            addr_str = f" · `{addr[:6]}…{addr[-4:]}`" if addr else ""
+            lines.append(f"• **{name}** ({', '.join(extra)}){addr_str}")
         await interaction.response.send_message(
             "Отслеживаемые коллекции в этом канале:\n" + "\n".join(lines),
             ephemeral=True,
         )
 
     @tree.command(name="nft_test", description="Прислать последнее событие коллекции (проверка)")
-    @app_commands.describe(collection="Slug коллекции на OpenSea")
-    async def nft_test(interaction: discord.Interaction, collection: str) -> None:
+    @app_commands.describe(
+        collection="Адрес контракта (0x…) или slug",
+        chain="Сеть коллекции (по умолчанию Ethereum)",
+    )
+    @app_commands.choices(chain=CHAIN_CHOICES)
+    async def nft_test(
+        interaction: discord.Interaction,
+        collection: str,
+        chain: app_commands.Choice[str] | None = None,
+    ) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
-        slug = collection.strip().lower()
+        chain_value = chain.value if chain else "ethereum"
         try:
-            events = await bot.opensea.fetch_events(slug, event_type="sale", limit=5)
+            meta = await bot.opensea.resolve_collection(collection, chain_value)
+            events = await bot.opensea.fetch_events(meta.slug, event_type="sale", limit=5)
         except OpenSeaError as exc:
             await interaction.followup.send(f"❌ Ошибка OpenSea: {exc}", ephemeral=True)
             return
         if not events:
             await interaction.followup.send(
-                f"У коллекции **{slug}** не нашлось недавних продаж для примера.",
+                f"У коллекции **{meta.name}** не нашлось недавних продаж для примера.",
                 ephemeral=True,
             )
             return
+        ev = events[-1]
+        usd = await bot.prices.usd_for(ev.price_symbol) if ev.price else None
+        meta_dict = {"name": meta.name, "image": meta.image}
         await interaction.followup.send(
             "Пример последнего события (так будут выглядеть алерты):",
-            embed=build_embed(events[-1]),
+            embed=build_embed(ev, meta=meta_dict, usd_rate=usd),
             ephemeral=True,
         )
 
@@ -243,32 +278,50 @@ def register_commands(tree: app_commands.CommandTree, bot: NftAlertBot) -> None:
         text = (
             "**NFT Alert Bot** — алерты о продажах/листингах NFT в вашем канале.\n\n"
             "**Команды:**\n"
-            "• `/nft_watch collection:<slug>` — начать отслеживать коллекцию в этом канале\n"
-            "• `/nft_unwatch collection:<slug>` — прекратить отслеживание\n"
+            "• `/nft_watch collection:<0x-адрес>` — отслеживать коллекцию в этом канале\n"
+            "• `/nft_unwatch collection:<адрес или slug>` — прекратить отслеживание\n"
             "• `/nft_list` — список коллекций в этом канале\n"
-            "• `/nft_test collection:<slug>` — показать пример последнего события\n\n"
-            "**Где взять slug?** В ссылке на коллекцию OpenSea: "
-            "`opensea.io/collection/`**`<slug>`** — например `boredapeyachtclub`.\n\n"
-            "У `/nft_watch` есть опции: тип событий (продажи/листинги/всё) и "
-            "минимальная цена для фильтра."
+            "• `/nft_test collection:<0x-адрес>` — показать пример последнего события\n\n"
+            "**Как указать коллекцию?** Лучше всего — **адресом контракта** (0x…) "
+            "и выбрать сеть. Можно и slug из ссылки OpenSea: "
+            "`opensea.io/collection/`**`<slug>`**.\n\n"
+            "У `/nft_watch` есть опции: `chain` (сеть), `event_type` "
+            "(продажи/листинги/всё) и `min_price` (фильтр по цене)."
         )
         await interaction.response.send_message(text, ephemeral=True)
+
+
+def _to_slug(bot: NftAlertBot, collection: str) -> str:
+    """Адрес -> slug (по сохранённым метаданным), иначе трактуем как slug."""
+    ident = collection.strip()
+    if ident.lower().startswith("0x"):
+        found = bot.storage.find_slug_by_address(ident)
+        if found:
+            return found
+    return ident.lower()
 
 
 def _etype_label(etype: str) -> str:
     return {"sale": "продажи", "listing": "листинги", "all": "всё"}.get(etype, etype)
 
 
-# ---- runner -------------------------------------------------------------
+# ---- runners ------------------------------------------------------------
+
+
+def build_bot(config: Config | None = None) -> NftAlertBot:
+    """Собрать (но не запускать) бота. Удобно для Google Colab / тестов."""
+    cfg = config or Config.from_env()
+    logging.basicConfig(
+        level=getattr(logging, cfg.log_level, logging.INFO),
+        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+    )
+    return NftAlertBot(cfg)
 
 
 def run() -> None:
+    """Обычный запуск из терминала: python run.py"""
     config = Config.from_env()
-    logging.basicConfig(
-        level=getattr(logging, config.log_level, logging.INFO),
-        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
-    )
-    bot = NftAlertBot(config)
+    bot = build_bot(config)
     bot.run(config.discord_token, log_handler=None)
 
 

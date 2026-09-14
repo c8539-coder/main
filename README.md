@@ -23,15 +23,27 @@ Polygon, Base, Arbitrum, Optimism и др.).
 
 | Команда | Что делает |
 |---|---|
-| `/nft_watch collection:<slug>` | Начать отслеживать коллекцию в текущем канале. Опции: `event_type` (продажи/листинги/всё) и `min_price`. |
-| `/nft_unwatch collection:<slug>` | Прекратить отслеживание в этом канале. |
+| `/nft_watch collection:<0x-адрес>` | Начать отслеживать коллекцию в текущем канале. Опции: `chain` (сеть), `event_type` (продажи/листинги/всё), `min_price`. |
+| `/nft_unwatch collection:<адрес или slug>` | Прекратить отслеживание в этом канале. |
 | `/nft_list` | Показать коллекции, отслеживаемые в этом канале. |
-| `/nft_test collection:<slug>` | Прислать пример последнего события (проверка). |
+| `/nft_test collection:<0x-адрес>` | Прислать пример последнего события (проверка вида алерта). |
 | `/nft_help` | Справка. |
 
-**Где взять `slug`?** Это часть ссылки на коллекцию OpenSea:
-`opensea.io/collection/`**`<slug>`**. Например, для Bored Ape Yacht Club
-slug — `boredapeyachtclub`.
+**Как указать коллекцию?** Рекомендуемый способ — **адрес контракта** (`0x…`) +
+выбор сети (`chain`). Например, Azuki:
+`0xED5AF388653567Af2F388E6224dC7C4b3241C544`, сеть Ethereum.
+
+Адрес удобно взять со страницы коллекции на OpenSea (раздел *Details*), из
+Etherscan или из ссылки. Также по-прежнему принимается **slug** из ссылки
+`opensea.io/collection/`**`<slug>`** (например `azuki`).
+
+Поддерживаемые сети: Ethereum, Polygon, Base, Arbitrum, Optimism, Avalanche.
+
+## Как выглядит алерт
+
+Минималистичный embed: в шапке — коллекция (имя + иконка), крупная цена с
+курсом в USD, `продавец → покупатель` и ссылка на транзакцию. Слева цветная
+полоска: 🟢 зелёная — продажа, 🔵 синяя — листинг. Справа — превью NFT.
 
 ---
 
@@ -74,6 +86,59 @@ Discord их разошлёт). После этого в любом канале
 
 ---
 
+## Запуск в Google Colab
+
+В Colab уже работает свой event-loop, поэтому нельзя вызывать `python run.py` /
+`bot.run()` напрямую — нужен `nest_asyncio` и `await bot.start(...)`. Готовый
+ноутбук: [`notebooks/nft_alert_colab.ipynb`](notebooks/nft_alert_colab.ipynb)
+(открыть в Colab → Runtime → Run all). Или создайте ноутбук вручную из ячеек ниже.
+
+**Ячейка 1 — зависимости:**
+```python
+!pip install -q "discord.py>=2.3,<3.0" aiohttp python-dotenv nest_asyncio
+```
+
+**Ячейка 2 — код бота.** Если репозиторий публичный:
+```python
+!git clone https://github.com/c8539-coder/main.git nft_bot
+%cd nft_bot
+```
+Если приватный — либо загрузите папку `bot/` через панель *Files* слева, либо
+клонируйте с токеном:
+```python
+!git clone https://<GITHUB_TOKEN>@github.com/c8539-coder/main.git nft_bot
+%cd nft_bot
+```
+
+**Ячейка 3 — ключи (вводятся скрыто, не сохраняются в ноутбуке):**
+```python
+import os, getpass
+os.environ["DISCORD_TOKEN"]  = getpass.getpass("DISCORD_TOKEN: ")
+os.environ["OPENSEA_API_KEY"] = getpass.getpass("OPENSEA_API_KEY: ")
+os.environ["POLL_INTERVAL_SECONDS"] = "60"
+```
+
+**Ячейка 4 — запуск:**
+```python
+import nest_asyncio
+nest_asyncio.apply()
+from bot.config import Config
+from bot.main import build_bot
+
+cfg = Config.from_env()
+bot = build_bot(cfg)
+await bot.start(cfg.discord_token)   # Colab поддерживает await на верхнем уровне
+```
+Ячейка будет «крутиться» — это нормально, значит бот работает. Чтобы
+остановить — прервите выполнение (■ Stop).
+
+> ⚠️ **Важно про Colab:** бесплатный Colab отключает среду при простое
+> (~90 минут) и максимум через ~12 часов. Пока вкладка/сессия жива — бот
+> работает и шлёт алерты; после отключения он останавливается, а подписки
+> сохраняются только внутри этой сессии (файл `data/…json` пропадёт вместе со
+> средой). Для режима **24/7** лучше хостинг с постоянным запуском (Railway,
+> Fly.io, VPS, домашний сервер) — код тот же, там запускается `python run.py`.
+
 ## Как это работает
 
 - Бот **опрашивает** OpenSea каждые `POLL_INTERVAL_SECONDS` секунд (по
@@ -100,11 +165,14 @@ Discord их разошлёт). После этого в любом канале
 ```
 bot/
   config.py       — чтение .env
-  storage.py      — хранение подписок и курсоров (JSON)
-  opensea.py      — клиент OpenSea API v2
-  formatting.py   — сборка Discord-эмбедов
+  storage.py      — хранение подписок, курсоров и метаданных коллекций (JSON)
+  opensea.py      — клиент OpenSea API v2 (адрес контракта -> коллекция, события)
+  prices.py       — курс токена в USD (CoinGecko, с кэшем; необязательно)
+  formatting.py   — сборка минималистичных Discord-эмбедов
   main.py         — бот, slash-команды, фоновый опрос
-run.py            — точка входа
+run.py            — точка входа (терминал/хостинг)
+notebooks/
+  nft_alert_colab.ipynb — запуск в Google Colab
 ```
 
 ## Примечания / ограничения
