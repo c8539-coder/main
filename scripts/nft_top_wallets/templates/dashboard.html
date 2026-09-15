@@ -262,7 +262,8 @@ cEl.onclick=()=>{navigator.clipboard?.writeText(M.contract); cEl.textContent='co
   setTimeout(()=>cEl.textContent=short(M.contract),1100);};
 
 const KPI=[
-  ['Holders',fmt(S.holders)],
+  ['Wallets ranked',fmt(S.holders)],
+  ['Team excluded',fmt(S.team_excluded||0)],
   ['Top score',fmt(S.score_max,1)],
   ['Whales &gt;10Ξ',fmt(S.whales)],
   ['Blue-chip holders',fmt(S.bluechip_holders)],
@@ -410,9 +411,9 @@ document.getElementById('tbody').addEventListener('mouseleave',()=>tip.style.opa
 
 /* ---------- footer ---------- */
 document.getElementById('m1').textContent=
-  `Holders of ${M.collection} on ${M.chain} are the entry funnel; the ranking comes from enriching each address's history on ${M.enrich_chain}. Every current holder is scored and written to CSV — this page shows the top ${DATA.top.length}.`;
+  `Holders of ${M.collection} on ${M.chain} are the entry funnel; the ranking comes from enriching each address's history on ${M.enrich_chain}. ${S.team_excluded||0} team / treasury wallets that batch-minted the allocation are flagged and excluded from the leaderboard (kept in the CSV). This page shows the top ${DATA.top.length} of the remaining wallets.`;
 document.getElementById('m2').textContent=
-  `Wallets are ranked on three groups only — Smart (blue-chip holdings + ETH balance, so whales fall here), Degen (flips), and Early (mint / early buy). ${M.chain} does not support getNFTSales, so flips fall back to out-transfer counts. ENS names are reverse-resolved (with forward verification) for the top 100 only and never affect the score. Sybil clustering is out of scope.`;
+  `Wallets are ranked on three groups only — Smart (blue-chip holdings + ETH balance, so whales fall here), Degen (flips), and Early (mint / early buy). "Early" uses transfer order, not price: a wallet counts if it minted or was among the first buyers by time — but batch-mint team allocations are removed so they don't inflate it. ${M.chain} does not support getNFTSales, so flips fall back to out-transfer counts. ENS names are reverse-resolved (with forward verification) for the top 100 only and never affect the score.`;
 document.getElementById('m3').textContent=
   `Group weights: `+COMPONENTS.map(c=>`${c.label} ${Math.round((M.weights[c.key]||0)*100)}%`).join(' · ')+`.`;
 document.getElementById('prov').innerHTML=

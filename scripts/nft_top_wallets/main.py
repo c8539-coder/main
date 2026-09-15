@@ -19,6 +19,7 @@ from .alchemy import AlchemyClient
 from .config import KOL_LIST_PATH, SMART_MONEY_LIST_PATH, Settings
 from .ens import resolve_many as resolve_ens_many
 from .enrich import (
+    TEAM_MINT_MIN,
     WalletFeatures,
     score_wallet,
     tag_degen,
@@ -31,6 +32,7 @@ OUT_DIR = os.path.join(os.path.dirname(__file__), "out")
 
 CSV_COLUMNS = [
     "address", "ens", "tokens_held", "is_minter", "is_early_buyer",
+    "mint_count", "is_team",
     "buys", "sells", "buy_and_flip", "mint_and_flip", "profitable_flipper",
     "realized_pnl", "bluechip_count", "bluechip_collections", "eth_balance",
     "labels", "total_score",
@@ -44,6 +46,8 @@ def _row(f: WalletFeatures) -> dict:
         "tokens_held": f.tokens_held,
         "is_minter": int(f.is_minter),
         "is_early_buyer": int(f.is_early_buyer),
+        "mint_count": f.mint_count,
+        "is_team": int(f.is_team),
         "buys": f.buys,
         "sells": f.sells,
         "buy_and_flip": int(f.buy_and_flip),
@@ -73,6 +77,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--ens", type=int, default=100,
         help="Резолвить ENS-имена для top-N кошельков (0 = выключить). Только отображение.",
+    )
+    p.add_argument(
+        "--keep-team", action="store_true",
+        help="Не исключать команду/трежери (батч-минтеров) из лидерборда.",
     )
     p.add_argument("--out", default=OUT_DIR, help="Каталог для CSV")
     return p.parse_args(argv)
@@ -150,11 +158,14 @@ def run(argv: list[str] | None = None) -> int:
         key=lambda f: f.total_score,
         reverse=True,
     )
+    # команда/трежери исключается из лидерборда (в CSV остаётся, помечена is_team)
+    n_team = sum(1 for f in ranked if f.is_team)
+    display = ranked if args.keep_team else [f for f in ranked if not f.is_team]
 
     # ENS-имена для верхушки (только отображение, на скор не влияют).
     # Резолвим после ранжирования и лишь top-N, чтобы не жечь лимиты.
-    if mainnet is not None and args.ens > 0 and ranked:
-        head = ranked[: args.ens]
+    if mainnet is not None and args.ens > 0 and display:
+        head = display[: args.ens]
         print(f"[+] Резолвлю ENS для top-{len(head)}…")
         names = resolve_ens_many(mainnet, [f.address for f in head])
         for f in head:
@@ -162,7 +173,7 @@ def run(argv: list[str] | None = None) -> int:
         if names:
             print(f"      найдено имён: {len(names)}")
 
-    # вывод
+    # вывод: в CSV пишем всех холдеров (команда помечена is_team), в лидерборд — display
     os.makedirs(args.out, exist_ok=True)
     ts = time.strftime("%Y%m%d-%H%M%S")
     csv_path = os.path.join(args.out, f"top_wallets_{contract[:10]}_{ts}.csv")
@@ -172,10 +183,13 @@ def run(argv: list[str] | None = None) -> int:
         for f in ranked:
             writer.writerow(_row(f))
 
-    _print_table(ranked[: args.top])
+    _print_table(display[: args.top])
+    if n_team:
+        note = "включена (--keep-team)" if args.keep_team else "исключена из лидерборда"
+        print(f"[i] команда/трежери: {n_team} кош. (батч-минт ≥{TEAM_MINT_MIN}) — {note}")
     print(f"\n[✓] Готово за {time.time() - t0:.1f}s. CSV: {csv_path}")
-    print(f"    Всего холдеров: {len(ranked)} | в CSV: {len(ranked)} | показано: "
-          f"{min(args.top, len(ranked))}")
+    print(f"    Холдеров: {len(ranked)} | в лидерборде: {len(display)} | показано: "
+          f"{min(args.top, len(display))}")
     return 0
 
 
@@ -188,6 +202,7 @@ def _print_table(rows: list[WalletFeatures]) -> None:
     print("-" * 108)
     for i, f in enumerate(rows, 1):
         tags = ",".join(t for t in (
+            "TEAM" if f.is_team else "",
             "M" if f.is_minter else "",
             "E" if f.is_early_buyer else "",
             "F" if f.profitable_flipper else "",

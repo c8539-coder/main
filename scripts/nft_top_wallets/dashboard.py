@@ -62,7 +62,12 @@ def build_payload(csv_path: str, *, top: int = 50, collection: str = "",
     weights = _weights()
 
     data = []
+    n_team = 0
     for r in rows:
+        # команда/трежери исключается из лидерборда (в CSV помечена is_team)
+        if _i(r.get("is_team", 0)):
+            n_team += 1
+            continue
         bc, bcoll = _i(r["bluechip_count"]), _i(r["bluechip_collections"])
         bal, flips = _f(r["eth_balance"]), _i(r["sells"])
         mint, early = _i(r["is_minter"]), _i(r["is_early_buyer"])
@@ -100,6 +105,7 @@ def build_payload(csv_path: str, *, top: int = 50, collection: str = "",
             "ens_found": sum(1 for d in data if d["ens"]),
             "total_eth": round(sum(bals), 1), "whales": sum(1 for d in data if d["eth"] > 10),
             "flippers": sum(1 for d in data if d["flips"] > 0),
+            "team_excluded": n_team,
         },
         "hist": [{"bucket": b, "count": hist.get(b, 0)} for b in range(0, 50, 5)],
         "top": data[:top],

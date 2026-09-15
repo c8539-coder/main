@@ -23,6 +23,9 @@ BLUECHIP_COLL_CAP = float(os.getenv("BLUECHIP_COLL_CAP", "4"))  # число р�
 BALANCE_CAP = float(os.getenv("BALANCE_CAP", "10"))        # баланс в нативном токене (лог-шкала)
 FLIP_CAP = float(os.getenv("FLIP_CAP", "10"))
 PNL_CAP = float(os.getenv("PNL_CAP", "5"))  # в нативном токене
+# Кошелёк, заминтивший >= этого числа токенов, считаем командой/трежери
+# (батч-минт аллокации), а не органическим ранним участником.
+TEAM_MINT_MIN = int(os.getenv("TEAM_MINT_MIN", "10"))
 
 
 def _log_ratio(value: float, cap: float) -> float:
@@ -39,6 +42,8 @@ class WalletFeatures:
     # early
     is_minter: bool = False
     is_early_buyer: bool = False
+    mint_count: int = 0          # сколько токенов заминтил (from 0x0)
+    is_team: bool = False        # батч-минтер аллокации (команда/трежери)
     # degen / pnl (в пределах анализируемой коллекции)
     buys: int = 0
     sells: int = 0
@@ -77,7 +82,9 @@ def tag_early(client: AlchemyClient, contract: str, settings: Settings,
 
     Первое приобретение каждого кошелька задаёт его "ранг". Минт (from 0x0)
     => is_minter. Первые ``early_buyer_fraction`` НЕ-минтовых приобретателей
-    => is_early_buyer.
+    => is_early_buyer. Кошелёк, заминтивший >= ``TEAM_MINT_MIN`` токенов
+    (батч-минт аллокации), помечается ``is_team`` — это команда/трежери, а не
+    органический ранний участник.
     """
     first_acq: list[tuple[str, bool]] = []  # (wallet, via_mint) в порядке появления
     seen: set[str] = set()
@@ -88,10 +95,17 @@ def tag_early(client: AlchemyClient, contract: str, settings: Settings,
             continue
         via_mint = client.is_mint(t)
         if via_mint:
-            feats.setdefault(to, WalletFeatures(address=to)).is_minter = True
+            f = feats.setdefault(to, WalletFeatures(address=to))
+            f.is_minter = True
+            f.mint_count += 1
         if to not in seen:
             seen.add(to)
             first_acq.append((to, via_mint))
+
+    # команда/трежери: батч-минтеры аллокации
+    for f in feats.values():
+        if f.mint_count >= TEAM_MINT_MIN:
+            f.is_team = True
 
     # ранние покупатели: первые N% по НЕ-минтовым первым приобретениям
     non_mint_first = [w for (w, m) in first_acq if not m]
@@ -253,7 +267,11 @@ def signals(f: WalletFeatures) -> dict[str, float]:
     whale = _log_ratio(f.eth_balance, BALANCE_CAP)
     smart = SMART_BLUECHIP_SHARE * bluechip + (1.0 - SMART_BLUECHIP_SHARE) * whale
     degen = _clamp01(f.num_flips / FLIP_CAP)
-    early = 1.0 if f.is_early_buyer else (0.6 if f.is_minter else 0.0)
+    # команда/трежери не получает early-кредита за батч-минт аллокации
+    if f.is_team:
+        early = 0.0
+    else:
+        early = 1.0 if f.is_early_buyer else (0.6 if f.is_minter else 0.0)
     return {"smart": smart, "degen": degen, "early": early}
 
 
