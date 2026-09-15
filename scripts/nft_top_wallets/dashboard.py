@@ -116,7 +116,11 @@ def render(payload: dict, out_path: str) -> str:
     tmpl = open(TEMPLATE, encoding="utf-8").read()
     if PLACEHOLDER not in tmpl:
         raise SystemExit(f"В шаблоне нет плейсхолдера {PLACEHOLDER!r}: {TEMPLATE}")
-    body = tmpl.replace(PLACEHOLDER, json.dumps(payload, ensure_ascii=False, separators=(",", ":")), 1)
+    title = f"{payload['meta']['collection']} Holder Intel"
+    body = (
+        tmpl.replace(PLACEHOLDER, json.dumps(payload, ensure_ascii=False, separators=(",", ":")), 1)
+            .replace("__TITLE__", title)
+    )
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     open(out_path, "w", encoding="utf-8").write(body)
     return out_path
