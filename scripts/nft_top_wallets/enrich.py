@@ -232,45 +232,42 @@ def _clamp01(x: float) -> float:
     return max(0.0, min(1.0, x))
 
 
-def score_wallet(f: WalletFeatures, weights: dict, have_sales: bool = True) -> float:
-    """Взвешенный скор 0..100.
+# Доля blue-chip внутри группы "smart" (остальное — баланс кита)
+SMART_BLUECHIP_SHARE = float(os.getenv("SMART_BLUECHIP_SHARE", "0.6"))
 
-    Сигналы непрерывные там, где возможно (blue-chip, баланс, флипы), чтобы топ
-    не «слипался» в одинаковые значения. ``have_sales=False`` (сеть без getNFTSales)
-    => PnL всегда 0, поэтому его вес перераспределяется на остальные сигналы,
-    иначе шкала теряет пятую часть диапазона.
+
+def signals(f: WalletFeatures) -> dict[str, float]:
+    """Нормализованные сигналы 0..1 по трём группам.
+
+    * **smart** — «умные деньги»: разнообразие blue-chip коллекций (важнее числа NFT)
+      плюс баланс кита (лог-шкала). Киты входят сюда же.
+    * **degen** — активность флипов в пределах коллекции.
+    * **early** — минтер (0.6) или ранний покупатель (1.0).
+
+    Сигналы непрерывные там, где возможно, чтобы топ не «слипался».
     """
-    # smart money: разнообразие blue-chip коллекций важнее сырого числа NFT
-    bluechip_sig = (
+    bluechip = (
         0.65 * _clamp01(f.bluechip_collections / BLUECHIP_COLL_CAP)
         + 0.35 * _log_ratio(f.bluechip_count, BLUECHIP_CAP)
     )
-    whale_sig = _log_ratio(f.eth_balance, BALANCE_CAP)
-    degen_sig = _clamp01(f.num_flips / FLIP_CAP)
-    if f.is_early_buyer:
-        early_sig = 1.0
-    elif f.is_minter:
-        early_sig = 0.6
-    else:
-        early_sig = 0.0
-    # ENS больше НЕ участвует в KOL (он слишком распространён — только для отображения)
-    kol_sig = 1.0 if any(l.startswith(("KOL:", "SM:")) for l in f.labels) else 0.0
-    pnl_sig = _clamp01(f.realized_pnl / PNL_CAP) if f.realized_pnl > 0 else 0.0
+    whale = _log_ratio(f.eth_balance, BALANCE_CAP)
+    smart = SMART_BLUECHIP_SHARE * bluechip + (1.0 - SMART_BLUECHIP_SHARE) * whale
+    degen = _clamp01(f.num_flips / FLIP_CAP)
+    early = 1.0 if f.is_early_buyer else (0.6 if f.is_minter else 0.0)
+    return {"smart": smart, "degen": degen, "early": early}
 
-    sigs = {
-        "bluechip": bluechip_sig,
-        "whale": whale_sig,
-        "degen": degen_sig,
-        "early": early_sig,
-        "kol": kol_sig,
-        "pnl": pnl_sig,
-    }
-    # активные веса: если продаж нет — PnL мёртв, убираем его из знаменателя
+
+def score_components(f: WalletFeatures, weights: dict) -> tuple[float, dict[str, float]]:
+    """Вернуть (total_score 0..100, вклад каждой группы в баллах)."""
+    sigs = signals(f)
     active = {k: weights.get(k, 0.0) for k in sigs}
-    if not have_sales:
-        active["pnl"] = 0.0
     total_w = sum(active.values()) or 1.0
+    total = round(sum(active[k] * sigs[k] for k in sigs) / total_w * 100, 2)
+    contrib = {k: round(active[k] * sigs[k] / total_w * 100, 2) for k in sigs}
+    return total, contrib
 
-    score = sum(active[k] * sigs[k] for k in sigs) / total_w
-    f.total_score = round(score * 100, 2)
-    return f.total_score
+
+def score_wallet(f: WalletFeatures, weights: dict) -> float:
+    total, _ = score_components(f, weights)
+    f.total_score = total
+    return total

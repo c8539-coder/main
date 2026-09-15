@@ -183,7 +183,7 @@
       <div class="sub">
         <span class="chip contract mono" id="contract" title="Click to copy"></span>
         <span class="chip"><span class="dot" style="background:var(--c-bluechip)"></span><span id="chain"></span></span>
-        <span class="chip caveat" id="caveat">PnL unavailable on this chain · see method</span>
+        <span class="chip caveat" id="caveat">3 groups · flips approximate on this chain</span>
       </div>
     </div>
     <div class="toolbar">
@@ -234,11 +234,9 @@
 const DATA = /*__DATA__*/{};
 
 const COMPONENTS = [
-  {key:'bluechip', label:'Smart money', def:'Blue-chip NFT holdings on Ethereum — collections held & count', c:'--c-bluechip'},
-  {key:'degen',    label:'Degen',       def:'Flip activity within the collection (out-transfers proxy)', c:'--c-degen'},
-  {key:'early',    label:'Early',       def:'Minter (0.6) or early buyer (1.0) of the collection', c:'--c-early'},
-  {key:'whale',    label:'Whale',       def:'Native ETH balance, log-scaled', c:'--c-whale'},
-  {key:'kol',      label:'KOL / curated',def:'Match against curated KOL / smart-money address lists', c:'--c-kol'},
+  {key:'smart', label:'Smart', def:'Blue-chip collections held on Ethereum + native ETH balance (whales)', c:'--c-bluechip'},
+  {key:'degen', label:'Degen', def:'Flip activity within the collection (out-transfers proxy)', c:'--c-degen'},
+  {key:'early', label:'Early', def:'Minter (0.6) or early buyer (1.0) of the collection', c:'--c-early'},
 ];
 const cssv = k => getComputedStyle(document.documentElement).getPropertyValue(k).trim();
 const fmt = (n,d=0)=>Number(n).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
@@ -310,13 +308,13 @@ const COLS=[
   {k:'bc',t:'Blue-chip',sort:'bc',r:true},
   {k:'flags',t:'Signals',sort:null},
 ];
+// a wallet "belongs to" a group when that group is its largest score contributor
+const topGroup = d => COMPONENTS.reduce((a,c)=> (d.contrib[c.key]||0)>(d.contrib[a]||0)?c.key:a, 'smart');
 const FILTERS=[
-  {id:'all',t:'All',f:()=>true},
-  {id:'whale',t:'Whales >10Ξ',f:d=>d.eth>10},
-  {id:'bc',t:'Blue-chip',f:d=>d.bc>0},
-  {id:'ens',t:'Named (ENS)',f:d=>d.ens},
-  {id:'minter',t:'Minters',f:d=>d.minter},
-  {id:'flip',t:'Flippers',f:d=>d.flips>0},
+  {id:'all',  t:'All',   f:()=>true},
+  {id:'smart',t:'Smart', f:d=>topGroup(d)==='smart'},
+  {id:'degen',t:'Degen', f:d=>topGroup(d)==='degen'},
+  {id:'early',t:'Early', f:d=>topGroup(d)==='early'},
 ];
 let sortKey='score', sortDir='desc', filt='all';
 const maxScore=S.score_max;
@@ -414,9 +412,9 @@ document.getElementById('tbody').addEventListener('mouseleave',()=>tip.style.opa
 document.getElementById('m1').textContent=
   `Holders of ${M.collection} on ${M.chain} are the entry funnel; the ranking comes from enriching each address's history on ${M.enrich_chain}. Every current holder is scored and written to CSV — this page shows the top ${DATA.top.length}.`;
 document.getElementById('m2').textContent=
-  `${M.chain} does not support getNFTSales, so realised PnL cannot be computed; its weight is redistributed across the remaining signals and flips fall back to out-transfer counts. ENS names are reverse-resolved (with forward verification) for the top 100 only and never affect the score. Sybil clustering is out of scope.`;
+  `Wallets are ranked on three groups only — Smart (blue-chip holdings + ETH balance, so whales fall here), Degen (flips), and Early (mint / early buy). ${M.chain} does not support getNFTSales, so flips fall back to out-transfer counts. ENS names are reverse-resolved (with forward verification) for the top 100 only and never affect the score. Sybil clustering is out of scope.`;
 document.getElementById('m3').textContent=
-  `Effective weights: `+COMPONENTS.map(c=>`${c.label} ${Math.round((M.weights[c.key]||0)*100)}%`).join(' · ')+`.`;
+  `Group weights: `+COMPONENTS.map(c=>`${c.label} ${Math.round((M.weights[c.key]||0)*100)}%`).join(' · ')+`.`;
 document.getElementById('prov').innerHTML=
   [`Source: Alchemy NFT + Core API`,`Generated ${M.generated}`,`Read-only · public on-chain data`]
   .map(t=>`<span class="chip">${t}</span>`).join('');

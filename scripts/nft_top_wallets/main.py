@@ -140,9 +140,9 @@ def run(argv: list[str] | None = None) -> int:
     print("[5/5] Размечаю KOL/curated…")
     tag_kol(feats, KOL_LIST_PATH, SMART_MONEY_LIST_PATH)
 
-    # скоринг (PnL-вес перераспределяется, если продажи недоступны на сети)
+    # скоринг: три группы — smart / degen / early
     for f in feats.values():
-        score_wallet(f, settings.weights, have_sales=have_sales)
+        score_wallet(f, settings.weights)
 
     # ранжируем только текущих холдеров (те, кто реально держит коллекцию)
     ranked = sorted(

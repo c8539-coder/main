@@ -22,26 +22,19 @@ import statistics as st
 import time
 from collections import Counter
 
-from . import enrich as E
+from .enrich import WalletFeatures, score_components
 
 HERE = os.path.dirname(__file__)
 OUT_DIR = os.path.join(HERE, "out")
 TEMPLATE = os.path.join(HERE, "templates", "dashboard.html")
 PLACEHOLDER = "/*__DATA__*/{}"
 
-# те же дефолты весов, что и в config.Settings (env-переопределяемые)
-_WEIGHT_KEYS = ("bluechip", "whale", "degen", "early", "kol", "pnl")
-_WEIGHT_DEFAULTS = {
-    "bluechip": "0.25", "whale": "0.15", "degen": "0.15",
-    "early": "0.15", "kol": "0.10", "pnl": "0.20",
-}
+# те же дефолты весов, что и в config.Settings (env-переопределяемые): три группы
+_WEIGHT_DEFAULTS = {"smart": "0.50", "degen": "0.25", "early": "0.25"}
 
 
-def _weights(have_sales: bool) -> dict[str, float]:
-    w = {k: float(os.getenv(f"W_{k.upper()}", _WEIGHT_DEFAULTS[k])) for k in _WEIGHT_KEYS}
-    if not have_sales:
-        w["pnl"] = 0.0
-    return {k: v for k, v in w.items() if v > 0}
+def _weights() -> dict[str, float]:
+    return {k: float(os.getenv(f"W_{k.upper()}", d)) for k, d in _WEIGHT_DEFAULTS.items()}
 
 
 def _f(x: str) -> float:
@@ -66,8 +59,7 @@ def build_payload(csv_path: str, *, top: int = 50, collection: str = "",
         raise SystemExit(f"Пустой CSV: {csv_path}")
 
     have_sales = any(_f(r.get("realized_pnl", 0)) != 0 for r in rows)
-    weights = _weights(have_sales)
-    total_w = sum(weights.values()) or 1.0
+    weights = _weights()
 
     data = []
     for r in rows:
@@ -75,18 +67,14 @@ def build_payload(csv_path: str, *, top: int = 50, collection: str = "",
         bal, flips = _f(r["eth_balance"]), _i(r["sells"])
         mint, early = _i(r["is_minter"]), _i(r["is_early_buyer"])
         labels = [l for l in (r.get("labels") or "").split(";") if l]
-        sig = {
-            "bluechip": 0.65 * E._clamp01(bcoll / E.BLUECHIP_COLL_CAP)
-                        + 0.35 * E._log_ratio(bc, E.BLUECHIP_CAP),
-            "whale": E._log_ratio(bal, E.BALANCE_CAP),
-            "degen": E._clamp01(flips / E.FLIP_CAP),
-            "early": 1.0 if early else (0.6 if mint else 0.0),
-            "kol": 1.0 if any(l.startswith(("KOL:", "SM:")) for l in labels) else 0.0,
-            "pnl": E._clamp01(_f(r["realized_pnl"]) / E.PNL_CAP) if _f(r["realized_pnl"]) > 0 else 0.0,
-        }
-        contrib = {k: round(weights.get(k, 0.0) * sig[k] / total_w * 100, 2) for k in weights}
+        f = WalletFeatures(
+            address=r["address"], tokens_held=_i(r["tokens_held"]),
+            is_minter=bool(mint), is_early_buyer=bool(early), sells=flips,
+            bluechip_count=bc, bluechip_collections=bcoll, eth_balance=bal,
+        )
+        total, contrib = score_components(f, weights)
         data.append({
-            "address": r["address"], "ens": r.get("ens", ""), "score": _f(r["total_score"]),
+            "address": r["address"], "ens": r.get("ens", ""), "score": total,
             "held": _i(r["tokens_held"]), "eth": round(bal, 3), "bc": bc, "bcoll": bcoll,
             "flips": flips, "minter": mint, "early": early, "labels": labels, "contrib": contrib,
         })
@@ -102,7 +90,7 @@ def build_payload(csv_path: str, *, top: int = 50, collection: str = "",
             "chain": chain, "enrich_chain": enrich_chain,
             "generated": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()),
             "no_sales": not have_sales,
-            "weights": {k: round(weights[k] / total_w, 3) for k in weights},
+            "weights": {k: round(weights[k] / (sum(weights.values()) or 1.0), 3) for k in weights},
         },
         "summary": {
             "holders": len(data), "score_max": round(max(scores), 1),

@@ -104,14 +104,12 @@ class Settings:
     early_buyer_fraction: float = float(os.getenv("EARLY_BUYER_FRACTION", "0.15"))
 
     # Веса скоринга (нормализованные сигналы 0..1)
+    # Три группы: smart (blue-chip + баланс кита), degen (флипы), early (минт/ранний).
     weights: dict = field(
         default_factory=lambda: {
-            "bluechip": float(os.getenv("W_BLUECHIP", "0.25")),
-            "whale": float(os.getenv("W_WHALE", "0.15")),
-            "degen": float(os.getenv("W_DEGEN", "0.15")),
-            "early": float(os.getenv("W_EARLY", "0.15")),
-            "kol": float(os.getenv("W_KOL", "0.10")),
-            "pnl": float(os.getenv("W_PNL", "0.20")),
+            "smart": float(os.getenv("W_SMART", "0.50")),
+            "degen": float(os.getenv("W_DEGEN", "0.25")),
+            "early": float(os.getenv("W_EARLY", "0.25")),
         }
     )
 
