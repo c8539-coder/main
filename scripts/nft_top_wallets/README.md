@@ -12,13 +12,22 @@
 
 | Сигнал | Что считаем | Источник |
 |---|---|---|
-| **early** | минтеры (`from = 0x0`) + первые ~15% покупателей | `getAssetTransfers` (order=asc) по контракту |
-| **degen** | buy-and-flip + mint-and-flip, число флипов, реализованный PnL | `getNFTSales` (fallback: out-трансферы) |
-| **smart money** | blue-chip NFT + баланс на Ethereum mainnet (кросс-чейн) | `getNFTsForOwner`, `eth_getBalance` |
-| **KOL** | join с curated-списком адресов (+ опц. ENS) | `lists/kol_wallets.csv` |
+| **smart money** | blue-chip NFT: **разнообразие коллекций** (важнее) + лог-число NFT | `getNFTsForOwner` по blue-chip контрактам на Ethereum mainnet |
+| **whale** | нативный баланс (лог-шкала) | `eth_getBalance` на mainnet |
+| **degen** | buy-and-flip + mint-and-flip, число флипов, реализованный PnL | `getNFTSales` (fallback: out-трансферы, PnL=0) |
+| **early** | минтеры (`from = 0x0`, 0.6) + первые ~15% покупателей (1.0) | `getAssetTransfers` (order=asc) по контракту |
+| **KOL** | join с curated-списком адресов | `lists/kol_wallets.csv` |
 
-Итоговый `total_score` — взвешенная сумма нормализованных сигналов (веса в `config.py`
-или через env `W_*`).
+Итоговый `total_score` (0..100) — взвешенная сумма нормализованных сигналов
+(веса в `config.py` или через env `W_*`). Сигналы непрерывные там, где можно
+(blue-chip, баланс, флипы), чтобы топ не «слипался» в одинаковые значения.
+
+> **Если сеть без `getNFTSales`** (напр. robinhood-mainnet), PnL посчитать нельзя,
+> поэтому его вес **перераспределяется** на остальные сигналы — иначе шкала теряет
+> пятую часть диапазона. Флипы в этом случае считаются по out-трансферам.
+
+**ENS.** Для top-N кошельков резолвится primary ENS-имя (reverse + forward-проверка,
+`--ens N`). Имя идёт **только в отображение** и на скор не влияет.
 
 ## Установка
 
@@ -58,7 +67,23 @@ CSV сохраняется в `scripts/nft_top_wallets/out/` (каталог в 
 - `--contract` — адрес контракта (по умолчанию из `COLLECTION_CONTRACT`).
 - `--top N` — сколько строк показать в консоли (в CSV попадают все холдеры).
 - `--limit N` — обогащать только первые N холдеров (экономия лимитов Alchemy).
-- `--no-mainnet` — не ходить на eth-mainnet (smart-money=0).
+- `--no-mainnet` — не ходить на eth-mainnet (smart-money/whale=0).
+- `--ens N` — резолвить ENS-имена для top-N кошельков (0 = выключить; по умолчанию 100).
+
+## Дашборд (HTML)
+
+Наглядный ранжированный дашборд собирается из CSV:
+
+```bash
+# берёт свежайший CSV из out/ автоматически
+python -m scripts.nft_top_wallets.dashboard
+# или явно
+python -m scripts.nft_top_wallets.dashboard --csv scripts/nft_top_wallets/out/top_wallets_*.csv --top 50
+```
+
+Самодостаточный `out/dashboard.html`: KPI, распределение скора, разбор каждого
+кошелька по 5 компонентам (наведи на полосу composition), фильтры и сортировка.
+Шаблон — `templates/dashboard.html` (данные подставляются в плейсхолдер).
 
 ## Curated-списки
 

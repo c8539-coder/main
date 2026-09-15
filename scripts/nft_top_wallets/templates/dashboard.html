@@ -1,0 +1,423 @@
+<title>Rare Friends Holder Intel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --ground:#f4f2ec; --surface:#fbfaf6; --raised:#ffffff;
+    --border:#e6e1d5; --border-strong:#d7d0bf;
+    --ink:#1a1c22; --ink-2:#565963; --ink-3:#8b8e97;
+    --accent:#a9761f; --accent-ink:#8a5f16; --accent-soft:rgba(169,118,31,.12);
+    --good:#2f8f5b; --shadow:0 1px 2px rgba(30,26,15,.06),0 8px 24px rgba(30,26,15,.05);
+    /* categorical — validated (light), fixed adjacency order */
+    --c-bluechip:#2a78d6; --c-degen:#eb6834; --c-early:#1baf7a; --c-whale:#eda100; --c-kol:#e87ba4;
+    --track:#ece7db;
+    --sans:"IBM Plex Sans",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  :root:not([data-theme="light"]){ color-scheme:dark; }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#0b0e13; --surface:#12161d; --raised:#171c25;
+      --border:#252c37; --border-strong:#333c49;
+      --ink:#eef1f6; --ink-2:#9aa4b2; --ink-3:#69727f;
+      --accent:#e6ad55; --accent-ink:#f0c079; --accent-soft:rgba(230,173,85,.14);
+      --good:#48b37f; --shadow:0 1px 2px rgba(0,0,0,.35),0 10px 30px rgba(0,0,0,.35);
+      --c-bluechip:#3987e5; --c-degen:#d95926; --c-early:#199e70; --c-whale:#c98500; --c-kol:#d55181;
+      --track:#1f2530;
+    }
+  }
+  :root[data-theme="dark"]{
+    color-scheme:dark;
+    --ground:#0b0e13; --surface:#12161d; --raised:#171c25;
+    --border:#252c37; --border-strong:#333c49;
+    --ink:#eef1f6; --ink-2:#9aa4b2; --ink-3:#69727f;
+    --accent:#e6ad55; --accent-ink:#f0c079; --accent-soft:rgba(230,173,85,.14);
+    --good:#48b37f; --shadow:0 1px 2px rgba(0,0,0,.35),0 10px 30px rgba(0,0,0,.35);
+    --c-bluechip:#3987e5; --c-degen:#d95926; --c-early:#199e70; --c-whale:#c98500; --c-kol:#d55181;
+    --track:#1f2530;
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+    font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding-inline:20px;padding-block:32px 56px}
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  a{color:var(--accent-ink)}
+  h1,h2,h3{text-wrap:balance;margin:0}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--accent-ink);font-weight:600}
+
+  /* ---------- header ---------- */
+  header{display:flex;flex-wrap:wrap;gap:24px 32px;align-items:flex-end;justify-content:space-between;
+    border-bottom:1px solid var(--border);padding-bottom:24px}
+  .id h1{font-size:clamp(26px,4vw,38px);font-weight:700;letter-spacing:-.02em;margin-top:8px}
+  .id .sub{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin-top:12px;color:var(--ink-2)}
+  .chip{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11.5px;
+    padding:4px 9px;border:1px solid var(--border);border-radius:999px;background:var(--surface);
+    color:var(--ink-2);white-space:nowrap}
+  .chip .dot{width:6px;height:6px;border-radius:50%}
+  .contract{cursor:pointer;transition:border-color .15s,color .15s}
+  .contract:hover{border-color:var(--border-strong);color:var(--ink)}
+  .caveat{border-color:color-mix(in srgb,var(--accent) 40%,var(--border));
+    background:var(--accent-soft);color:var(--accent-ink)}
+  .toolbar{display:flex;gap:8px;align-items:center}
+  button.ghost{font-family:var(--sans);font-size:12.5px;color:var(--ink-2);background:var(--surface);
+    border:1px solid var(--border);border-radius:8px;padding:8px 12px;cursor:pointer;transition:.15s}
+  button.ghost:hover{border-color:var(--border-strong);color:var(--ink)}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+
+  /* ---------- kpi strip ---------- */
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:1px;
+    background:var(--border);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-top:24px}
+  .kpi{background:var(--surface);padding:14px 16px}
+  .kpi .k{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
+  .kpi .v{font-family:var(--mono);font-size:22px;font-weight:600;margin-top:6px;letter-spacing:-.01em}
+  .kpi .v small{font-size:12px;color:var(--ink-3);font-weight:500}
+
+  /* ---------- panels ---------- */
+  .grid2{display:grid;grid-template-columns:1.1fr 1fr;gap:16px;margin-top:16px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px 18px 20px;
+    box-shadow:var(--shadow)}
+  .panel h2{font-size:14px;font-weight:600;letter-spacing:.01em;display:flex;align-items:baseline;gap:8px}
+  .panel h2 .hint{font-family:var(--mono);font-size:11px;color:var(--ink-3);font-weight:400}
+
+  /* histogram */
+  .hist{display:flex;align-items:flex-end;gap:8px;height:150px;margin-top:18px;
+    padding-top:14px;position:relative}
+  .hist::before,.hist::after{content:"";position:absolute;left:0;right:0;border-top:1px dashed var(--border);opacity:.7}
+  .hist::before{top:0}.hist::after{top:50%}
+  .hcol{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%;gap:6px}
+  .hbar{width:100%;max-width:34px;background:var(--accent);border-radius:4px 4px 2px 2px;min-height:2px;
+    transition:height .5s cubic-bezier(.2,.7,.2,1)}
+  .hcol .hn{font-family:var(--mono);font-size:11px;color:var(--ink-2);font-weight:500}
+  .hx{display:flex;gap:8px;margin-top:8px}
+  .hx span{flex:1;text-align:center;font-family:var(--mono);font-size:10px;color:var(--ink-3)}
+  .cap{color:var(--ink-3);font-size:12px;margin-top:14px}
+
+  /* method / legend */
+  .legend{display:flex;flex-direction:column;gap:2px;margin-top:14px}
+  .lrow{display:grid;grid-template-columns:14px 1fr auto;gap:10px;align-items:center;padding:7px 0;
+    border-bottom:1px solid var(--border)}
+  .lrow:last-child{border-bottom:0}
+  .sw{width:12px;height:12px;border-radius:3px}
+  .lrow .lt{font-weight:600}
+  .lrow .ld{color:var(--ink-3);font-size:12px;font-weight:400}
+  .lrow .lw{font-family:var(--mono);font-size:12px;color:var(--ink-2);font-weight:500}
+
+  /* ---------- leaderboard ---------- */
+  .board{margin-top:28px}
+  .board-head{display:flex;flex-wrap:wrap;gap:12px;align-items:baseline;justify-content:space-between;margin-bottom:14px}
+  .board-head h2{font-size:18px;font-weight:700;letter-spacing:-.01em}
+  .filters{display:flex;flex-wrap:wrap;gap:7px}
+  .filters button{font-family:var(--mono);font-size:11.5px;padding:6px 11px;border-radius:999px;
+    border:1px solid var(--border);background:var(--surface);color:var(--ink-2);cursor:pointer;transition:.15s}
+  .filters button:hover{border-color:var(--border-strong);color:var(--ink)}
+  .filters button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);
+    color:#fff;font-weight:600}
+  :root:not([data-theme="light"]) .filters button[aria-pressed="true"],
+  :root[data-theme="dark"] .filters button[aria-pressed="true"]{color:#1a1200}
+
+  .tablewrap{overflow-x:auto;border:1px solid var(--border);border-radius:12px;background:var(--surface);
+    box-shadow:var(--shadow)}
+  table{border-collapse:collapse;width:100%;min-width:720px}
+  thead th{position:sticky;top:env(safe-area-inset-top,0px);background:var(--surface);
+    text-align:left;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3);
+    font-weight:600;padding:12px 14px;border-bottom:1px solid var(--border);white-space:nowrap}
+  th.sortable{cursor:pointer;user-select:none}
+  th.sortable:hover{color:var(--ink)}
+  th .ar{opacity:.4;margin-left:3px}
+  th[aria-sort="descending"] .ar,th[aria-sort="ascending"] .ar{opacity:1;color:var(--accent-ink)}
+  th.r,td.r{text-align:right}
+  tbody td{padding:11px 14px;border-bottom:1px solid var(--border);vertical-align:middle}
+  tbody tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:color-mix(in srgb,var(--accent) 5%,transparent)}
+  .rank{font-family:var(--mono);color:var(--ink-3);font-size:12px;width:34px}
+  .rank.top{color:var(--accent-ink);font-weight:600}
+  .who{display:flex;align-items:center;gap:8px;min-width:0}
+  .who .nm{font-family:var(--mono);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px}
+  .who .nm.ens{color:var(--accent-ink);font-weight:600}
+  .copy{border:0;background:transparent;color:var(--ink-3);cursor:pointer;padding:3px;border-radius:5px;
+    display:inline-flex;flex:0 0 auto;transition:.15s}
+  .copy:hover{color:var(--ink);background:var(--track)}
+  .copy.ok{color:var(--good)}
+  .copy svg{width:14px;height:14px;display:block}
+  .score{font-family:var(--mono);font-weight:600;font-size:14px}
+  .comp{display:flex;height:12px;width:200px;background:var(--track);border-radius:4px;overflow:hidden;gap:2px;padding:0}
+  .comp i{height:100%;display:block;border-radius:2px;min-width:0}
+  .flags{display:flex;gap:4px}
+  .flag{font-family:var(--mono);font-size:10px;font-weight:600;width:18px;height:18px;border-radius:5px;
+    display:grid;place-items:center;border:1px solid transparent}
+  .flag.m{color:var(--c-early);border-color:color-mix(in srgb,var(--c-early) 45%,transparent);background:color-mix(in srgb,var(--c-early) 12%,transparent)}
+  .flag.e{color:var(--accent-ink);border-color:color-mix(in srgb,var(--accent) 45%,transparent);background:var(--accent-soft)}
+  .flag.f{color:var(--c-degen);border-color:color-mix(in srgb,var(--c-degen) 45%,transparent);background:color-mix(in srgb,var(--c-degen) 12%,transparent)}
+  .bc-cell .n{font-family:var(--mono);font-size:13px}
+  .bc-cell .c{font-family:var(--mono);font-size:11px;color:var(--ink-3)}
+  .muted-0{color:var(--ink-3)}
+
+  /* tooltip */
+  #tip{position:fixed;z-index:50;pointer-events:none;opacity:0;transition:opacity .12s;
+    background:var(--raised);border:1px solid var(--border-strong);border-radius:9px;padding:10px 11px;
+    box-shadow:var(--shadow);font-size:12px;min-width:150px}
+  #tip .th{font-family:var(--mono);font-size:11px;color:var(--ink-3);margin-bottom:6px}
+  #tip .tr{display:flex;align-items:center;gap:7px;padding:2px 0}
+  #tip .tr .sw{width:9px;height:9px;border-radius:2px}
+  #tip .tr .tl{flex:1}
+  #tip .tr .tv{font-family:var(--mono);font-weight:600}
+  #tip .tr.dim{opacity:.45}
+
+  footer{margin-top:36px;border-top:1px solid var(--border);padding-top:20px;color:var(--ink-3);font-size:12px}
+  footer h3{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-2);margin-bottom:8px}
+  footer p{margin:6px 0;max-width:70ch}
+  footer .prov{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="id">
+      <div class="eyebrow">On-chain holder intelligence</div>
+      <h1 id="collname"></h1>
+      <div class="sub">
+        <span class="chip contract mono" id="contract" title="Click to copy"></span>
+        <span class="chip"><span class="dot" style="background:var(--c-bluechip)"></span><span id="chain"></span></span>
+        <span class="chip caveat" id="caveat">PnL unavailable on this chain · see method</span>
+      </div>
+    </div>
+    <div class="toolbar">
+      <button class="ghost" id="theme" aria-label="Toggle colour theme">◑ Theme</button>
+    </div>
+  </header>
+
+  <section class="kpis" id="kpis" aria-label="Summary statistics"></section>
+
+  <div class="grid2">
+    <div class="panel">
+      <h2>Score distribution <span class="hint" id="disthint"></span></h2>
+      <div class="hist" id="hist" role="img" aria-label="Histogram of wallet scores"></div>
+      <div class="hx" id="histx"></div>
+      <p class="cap" id="distcap"></p>
+    </div>
+    <div class="panel">
+      <h2>How the score is built <span class="hint">weighted · 0–100</span></h2>
+      <div class="legend" id="legend"></div>
+    </div>
+  </div>
+
+  <section class="board">
+    <div class="board-head">
+      <h2>Top wallets</h2>
+      <div class="filters" id="filters" role="group" aria-label="Filter wallets"></div>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr id="thead"></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    <h3>Method &amp; provenance</h3>
+    <p id="m1"></p>
+    <p id="m2"></p>
+    <p id="m3"></p>
+    <div class="prov" id="prov"></div>
+  </footer>
+</div>
+
+<div id="tip" role="status" aria-live="polite"></div>
+
+<script>
+const DATA = /*__DATA__*/{};
+
+const COMPONENTS = [
+  {key:'bluechip', label:'Smart money', def:'Blue-chip NFT holdings on Ethereum — collections held & count', c:'--c-bluechip'},
+  {key:'degen',    label:'Degen',       def:'Flip activity within the collection (out-transfers proxy)', c:'--c-degen'},
+  {key:'early',    label:'Early',       def:'Minter (0.6) or early buyer (1.0) of the collection', c:'--c-early'},
+  {key:'whale',    label:'Whale',       def:'Native ETH balance, log-scaled', c:'--c-whale'},
+  {key:'kol',      label:'KOL / curated',def:'Match against curated KOL / smart-money address lists', c:'--c-kol'},
+];
+const cssv = k => getComputedStyle(document.documentElement).getPropertyValue(k).trim();
+const fmt = (n,d=0)=>Number(n).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
+const short = a => a.slice(0,6)+'…'+a.slice(-4);
+
+/* ---------- theme ---------- */
+const root=document.documentElement, tb=document.getElementById('theme');
+try{const t=localStorage.getItem('rf-theme'); if(t)root.setAttribute('data-theme',t);}catch(e){}
+tb.onclick=()=>{
+  const cur=root.getAttribute('data-theme')|| (matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');
+  const nx=cur==='dark'?'light':'dark'; root.setAttribute('data-theme',nx);
+  try{localStorage.setItem('rf-theme',nx);}catch(e){}
+  drawHist();
+};
+
+/* ---------- header + kpis ---------- */
+const M=DATA.meta, S=DATA.summary;
+document.getElementById('collname').textContent=M.collection;
+document.getElementById('chain').textContent=M.chain+' → '+M.enrich_chain;
+const cEl=document.getElementById('contract');
+cEl.textContent=short(M.contract);
+cEl.onclick=()=>{navigator.clipboard?.writeText(M.contract); cEl.textContent='copied ✓';
+  setTimeout(()=>cEl.textContent=short(M.contract),1100);};
+
+const KPI=[
+  ['Holders',fmt(S.holders)],
+  ['Top score',fmt(S.score_max,1)],
+  ['Whales &gt;10Ξ',fmt(S.whales)],
+  ['Blue-chip holders',fmt(S.bluechip_holders)],
+  ['Minters',fmt(S.minters)],
+  ['Total balance',fmt(S.total_eth,1)+' <small>Ξ</small>'],
+  ['ENS resolved',fmt(S.ens_found)+' <small>/top100</small>'],
+];
+document.getElementById('kpis').innerHTML=KPI.map(([k,v])=>
+  `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+
+/* ---------- histogram ---------- */
+const bins=DATA.hist.filter(b=>b.bucket<=30);
+const hmax=Math.max(...bins.map(b=>b.count),1);
+document.getElementById('disthint').textContent=`n=${fmt(S.holders)}`;
+document.getElementById('histx').innerHTML=bins.map(b=>`<span>${b.bucket}–${b.bucket+5}</span>`).join('');
+document.getElementById('distcap').textContent=
+  `Median wallet scores ${fmt(S.score_median,1)}; the long right tail (25+) is the ${bins.filter(b=>b.bucket>=25).reduce((a,b)=>a+b.count,0)} wallets worth a look.`;
+function drawHist(){
+  document.getElementById('hist').innerHTML=bins.map(b=>{
+    const h=Math.max(b.count/hmax*100,1.5);
+    return `<div class="hcol"><span class="hn">${b.count||''}</span>`+
+      `<div class="hbar" style="height:${h}%"></div></div>`;
+  }).join('');
+}
+drawHist();
+
+/* ---------- legend / method ---------- */
+document.getElementById('legend').innerHTML=COMPONENTS.map(c=>{
+  const w=M.weights[c.key]; const wt=w?Math.round(w*100)+'%':'—';
+  return `<div class="lrow"><span class="sw" style="background:var(${c.c})"></span>`+
+    `<span><span class="lt">${c.label}</span> · <span class="ld">${c.def}</span></span>`+
+    `<span class="lw">${wt}</span></div>`;
+}).join('');
+
+/* ---------- table ---------- */
+const COLS=[
+  {k:'rank',t:'#',sort:null},
+  {k:'who',t:'Wallet',sort:null},
+  {k:'score',t:'Score',sort:'score',r:true},
+  {k:'comp',t:'Composition',sort:null},
+  {k:'held',t:'Held',sort:'held',r:true},
+  {k:'eth',t:'ETH',sort:'eth',r:true},
+  {k:'bc',t:'Blue-chip',sort:'bc',r:true},
+  {k:'flags',t:'Signals',sort:null},
+];
+const FILTERS=[
+  {id:'all',t:'All',f:()=>true},
+  {id:'whale',t:'Whales >10Ξ',f:d=>d.eth>10},
+  {id:'bc',t:'Blue-chip',f:d=>d.bc>0},
+  {id:'ens',t:'Named (ENS)',f:d=>d.ens},
+  {id:'minter',t:'Minters',f:d=>d.minter},
+  {id:'flip',t:'Flippers',f:d=>d.flips>0},
+];
+let sortKey='score', sortDir='desc', filt='all';
+const maxScore=S.score_max;
+
+document.getElementById('thead').innerHTML=COLS.map(c=>{
+  const cls=[c.sort?'sortable':'',c.r?'r':''].filter(Boolean).join(' ');
+  const asort=c.sort===sortKey?(sortDir==='desc'?'descending':'ascending'):'none';
+  return `<th class="${cls}" ${c.sort?`data-sort="${c.sort}" aria-sort="${asort}"`:''}>`+
+    `${c.t}${c.sort?' <span class="ar">↕</span>':''}</th>`;
+}).join('');
+
+document.getElementById('filters').innerHTML=FILTERS.map(f=>
+  `<button data-f="${f.id}" aria-pressed="${f.id==='all'}">${f.t}</button>`).join('');
+
+function seg(d){
+  return COMPONENTS.map(c=>{
+    const v=d.contrib[c.key]||0; if(v<=0) return '';
+    const w=v/maxScore*100;
+    return `<i style="width:${w}%;background:var(${c.c})" data-k="${c.key}" data-v="${v}"></i>`;
+  }).join('');
+}
+function flags(d){
+  let o='';
+  if(d.minter) o+='<span class="flag m" title="Minter">M</span>';
+  if(d.early)  o+='<span class="flag e" title="Early buyer">E</span>';
+  if(d.flips>0)o+='<span class="flag f" title="'+d.flips+' flips">F</span>';
+  return `<div class="flags">${o||'<span class="muted-0">—</span>'}</div>`;
+}
+const copyIcon=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>`;
+
+function render(){
+  const rows=DATA.top.filter(FILTERS.find(f=>f.id===filt).f)
+    .slice().sort((a,b)=> sortDir==='desc'? b[sortKey]-a[sortKey] : a[sortKey]-b[sortKey]);
+  const tb=document.getElementById('tbody');
+  if(!rows.length){tb.innerHTML=`<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--ink-3)">No wallets match this filter.</td></tr>`;return;}
+  tb.innerHTML=rows.map((d,i)=>{
+    const rank=sortKey==='score'&&sortDir==='desc'&&filt==='all'?(i+1):('·');
+    const nm=d.ens?`<span class="nm ens" title="${d.address}">${d.ens}</span>`
+      :`<span class="nm" title="${d.address}">${short(d.address)}</span>`;
+    return `<tr>
+      <td class="rank ${i<3&&rank!=='·'?'top':''}">${rank}</td>
+      <td><div class="who">${nm}<button class="copy" data-a="${d.address}" title="Copy address" aria-label="Copy address">${copyIcon}</button></div></td>
+      <td class="r"><span class="score">${fmt(d.score,1)}</span></td>
+      <td><div class="comp" data-i="${DATA.top.indexOf(d)}">${seg(d)}</div></td>
+      <td class="r num">${d.held}</td>
+      <td class="r num ${d.eth<0.01?'muted-0':''}">${fmt(d.eth, d.eth>=100?0:2)}</td>
+      <td class="r bc-cell">${d.bc? `<span class="n">${d.bc}</span> <span class="c">/ ${d.bcoll}col</span>`:'<span class="muted-0">0</span>'}</td>
+      <td>${flags(d)}</td>
+    </tr>`;
+  }).join('');
+}
+render();
+
+/* sorting */
+document.getElementById('thead').addEventListener('click',e=>{
+  const th=e.target.closest('th[data-sort]'); if(!th)return;
+  const k=th.dataset.sort;
+  if(k===sortKey){sortDir=sortDir==='desc'?'asc':'desc';} else {sortKey=k;sortDir='desc';}
+  document.querySelectorAll('th[data-sort]').forEach(x=>x.setAttribute('aria-sort',
+    x.dataset.sort===sortKey?(sortDir==='desc'?'descending':'ascending'):'none'));
+  render();
+});
+/* filters */
+document.getElementById('filters').addEventListener('click',e=>{
+  const b=e.target.closest('button[data-f]'); if(!b)return;
+  filt=b.dataset.f;
+  document.querySelectorAll('#filters button').forEach(x=>x.setAttribute('aria-pressed',x.dataset.f===filt));
+  render();
+});
+/* copy address */
+document.getElementById('tbody').addEventListener('click',e=>{
+  const b=e.target.closest('.copy'); if(!b)return;
+  navigator.clipboard?.writeText(b.dataset.a);
+  b.classList.add('ok'); setTimeout(()=>b.classList.remove('ok'),1000);
+});
+
+/* ---------- composition tooltip ---------- */
+const tip=document.getElementById('tip');
+document.getElementById('tbody').addEventListener('mousemove',e=>{
+  const bar=e.target.closest('.comp'); if(!bar){tip.style.opacity=0;return;}
+  const d=DATA.top[+bar.dataset.i];
+  tip.innerHTML=`<div class="th">${d.ens||short(d.address)} · ${fmt(d.score,1)} pts</div>`+
+    COMPONENTS.map(c=>{const v=d.contrib[c.key]||0;
+      return `<div class="tr ${v<=0?'dim':''}"><span class="sw" style="background:var(${c.c})"></span>`+
+        `<span class="tl">${c.label}</span><span class="tv">${fmt(v,1)}</span></div>`;}).join('');
+  tip.style.opacity=1;
+  const pad=14,w=tip.offsetWidth,h=tip.offsetHeight;
+  let x=e.clientX+pad,y=e.clientY+pad;
+  if(x+w>innerWidth-8)x=e.clientX-w-pad; if(y+h>innerHeight-8)y=e.clientY-h-pad;
+  tip.style.left=x+'px';tip.style.top=y+'px';
+});
+document.getElementById('tbody').addEventListener('mouseleave',()=>tip.style.opacity=0);
+
+/* ---------- footer ---------- */
+document.getElementById('m1').textContent=
+  `Holders of ${M.collection} on ${M.chain} are the entry funnel; the ranking comes from enriching each address's history on ${M.enrich_chain}. Every current holder is scored and written to CSV — this page shows the top ${DATA.top.length}.`;
+document.getElementById('m2').textContent=
+  `${M.chain} does not support getNFTSales, so realised PnL cannot be computed; its weight is redistributed across the remaining signals and flips fall back to out-transfer counts. ENS names are reverse-resolved (with forward verification) for the top 100 only and never affect the score. Sybil clustering is out of scope.`;
+document.getElementById('m3').textContent=
+  `Effective weights: `+COMPONENTS.map(c=>`${c.label} ${Math.round((M.weights[c.key]||0)*100)}%`).join(' · ')+`.`;
+document.getElementById('prov').innerHTML=
+  [`Source: Alchemy NFT + Core API`,`Generated ${M.generated}`,`Read-only · public on-chain data`]
+  .map(t=>`<span class="chip">${t}</span>`).join('');
+</script>
