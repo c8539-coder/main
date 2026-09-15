@@ -234,7 +234,7 @@
 const DATA = /*__DATA__*/{};
 
 const COMPONENTS = [
-  {key:'smart', label:'Smart', def:'Blue-chip collections held on Ethereum + native ETH balance (whales)', c:'--c-bluechip'},
+  {key:'smart', label:'Smart', def:'Blue-chip collections on Ethereum + ETH balance + conviction (how many of this collection they hold) — the whale signals', c:'--c-bluechip'},
   {key:'degen', label:'Degen', def:'Flip activity within the collection (out-transfers proxy)', c:'--c-degen'},
   {key:'early', label:'Early', def:'Minter (0.6) or early buyer (1.0) of the collection', c:'--c-early'},
 ];
@@ -413,7 +413,7 @@ document.getElementById('tbody').addEventListener('mouseleave',()=>tip.style.opa
 document.getElementById('m1').textContent=
   `Holders of ${M.collection} on ${M.chain} are the entry funnel; the ranking comes from enriching each address's history on ${M.enrich_chain}. ${S.team_excluded||0} team / treasury wallets that batch-minted the allocation are flagged and excluded from the leaderboard (kept in the CSV). This page shows the top ${DATA.top.length} of the remaining wallets.`;
 document.getElementById('m2').textContent=
-  `Wallets are ranked on three groups only — Smart (blue-chip holdings + ETH balance, so whales fall here), Degen (flips), and Early (mint / early buy). "Early" uses transfer order, not price: a wallet counts if it minted or was among the first buyers by time — but batch-mint team allocations are removed so they don't inflate it. ${M.chain} does not support getNFTSales, so flips fall back to out-transfer counts. ENS names are reverse-resolved (with forward verification) for the top 100 only and never affect the score.`;
+  `Wallets are ranked on three groups only — Smart (blue-chip holdings + ETH balance + how many of this collection they hold, so whales and conviction floor-buyers fall here), Degen (flips), and Early (mint / early buy). "Early" uses transfer order, not price: a wallet counts if it minted or was among the first buyers by time — but batch-mint team allocations are removed so they don't inflate it. ${M.chain} does not support getNFTSales, so flips fall back to out-transfer counts. ENS names are reverse-resolved (with forward verification) for the top 100 only and never affect the score.`;
 document.getElementById('m3').textContent=
   `Group weights: `+COMPONENTS.map(c=>`${c.label} ${Math.round((M.weights[c.key]||0)*100)}%`).join(' · ')+`.`;
 document.getElementById('prov').innerHTML=

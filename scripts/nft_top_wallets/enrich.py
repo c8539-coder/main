@@ -21,6 +21,7 @@ from .config import BLUECHIP_CONTRACTS, Settings, ZERO_ADDRESS
 BLUECHIP_CAP = float(os.getenv("BLUECHIP_CAP", "20"))       # число blue-chip NFT (лог-шкала)
 BLUECHIP_COLL_CAP = float(os.getenv("BLUECHIP_COLL_CAP", "4"))  # число разных blue-chip коллекций
 BALANCE_CAP = float(os.getenv("BALANCE_CAP", "10"))        # баланс в нативном токене (лог-шкала)
+HELD_CAP = float(os.getenv("HELD_CAP", "9"))               # NFT коллекции сверх 1 (лог-шкала): 10 шт = максимум
 FLIP_CAP = float(os.getenv("FLIP_CAP", "10"))
 PNL_CAP = float(os.getenv("PNL_CAP", "5"))  # в нативном токене
 # Кошелёк, заминтивший >= этого числа токенов, считаем командой/трежери
@@ -246,15 +247,18 @@ def _clamp01(x: float) -> float:
     return max(0.0, min(1.0, x))
 
 
-# Доля blue-chip внутри группы "smart" (остальное — баланс кита)
-SMART_BLUECHIP_SHARE = float(os.getenv("SMART_BLUECHIP_SHARE", "0.6"))
+# Доли внутри группы "smart": blue-chip, holdings этой коллекции (conviction),
+# остаток — баланс кита (ETH). Сумма первых двух должна быть <= 1.
+SMART_BLUECHIP_SHARE = float(os.getenv("SMART_BLUECHIP_SHARE", "0.5"))
+SMART_HELD_SHARE = float(os.getenv("SMART_HELD_SHARE", "0.25"))
 
 
 def signals(f: WalletFeatures) -> dict[str, float]:
     """Нормализованные сигналы 0..1 по трём группам.
 
-    * **smart** — «умные деньги»: разнообразие blue-chip коллекций (важнее числа NFT)
-      плюс баланс кита (лог-шкала). Киты входят сюда же.
+    * **smart** — «умные деньги» / киты: разнообразие blue-chip коллекций (важнее
+      числа NFT), баланс ETH (кит), и **conviction** — сколько NFT самой коллекции
+      держит кошелёк (флор-байеры, поддерживающие цену). Все три — «китовые».
     * **degen** — активность флипов в пределах коллекции.
     * **early** — минтер (0.6) или ранний покупатель (1.0).
 
@@ -265,7 +269,14 @@ def signals(f: WalletFeatures) -> dict[str, float]:
         + 0.35 * _log_ratio(f.bluechip_count, BLUECHIP_CAP)
     )
     whale = _log_ratio(f.eth_balance, BALANCE_CAP)
-    smart = SMART_BLUECHIP_SHARE * bluechip + (1.0 - SMART_BLUECHIP_SHARE) * whale
+    # conviction: держит МНОГО NFT этой коллекции (сверх 1-й штуки)
+    conviction = _log_ratio(max(f.tokens_held - 1, 0), HELD_CAP)
+    whale_share = max(0.0, 1.0 - SMART_BLUECHIP_SHARE - SMART_HELD_SHARE)
+    smart = (
+        SMART_BLUECHIP_SHARE * bluechip
+        + SMART_HELD_SHARE * conviction
+        + whale_share * whale
+    )
     degen = _clamp01(f.num_flips / FLIP_CAP)
     # команда/трежери не получает early-кредита за батч-минт аллокации
     if f.is_team:

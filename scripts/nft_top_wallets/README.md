@@ -14,7 +14,7 @@
 
 | Группа | Что считаем | Источник |
 |---|---|---|
-| **smart** (50%) | blue-chip: **разнообразие коллекций** (важнее) + лог-число NFT, **+ баланс кита** (лог-шкала) | `getNFTsForOwner` по blue-chip контрактам + `eth_getBalance` на Ethereum mainnet |
+| **smart** (50%) | blue-chip: **разнообразие коллекций** (важнее) + лог-число NFT; **баланс кита** (ETH); **conviction** — сколько NFT самой коллекции держит (сверх 1-й) | `getNFTsForOwner` + `eth_getBalance` на Ethereum mainnet + `tokens_held` |
 | **degen** (25%) | число флипов (buy-and-flip / mint-and-flip) | `getNFTSales` (fallback: out-трансферы) |
 | **early** (25%) | минтеры (`from = 0x0`, 0.6) + первые ~15% покупателей (1.0) | `getAssetTransfers` (order=asc) по контракту |
 
