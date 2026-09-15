@@ -188,5 +188,10 @@ class AlchemyClient:
         hex_wei = self._rpc("eth_getBalance", [address, "latest"])
         return int(hex_wei, 16) / 1e18
 
+    def eth_call(self, to: str, data: str, block: str = "latest") -> str:
+        """Низкоуровневый eth_call -> hex-строка результата ('0x' при пустом)."""
+        result = self._rpc("eth_call", [{"to": to, "data": data}, block])
+        return result or "0x"
+
     def is_mint(self, transfer: dict) -> bool:
         return (transfer.get("from") or "").lower() == ZERO_ADDRESS

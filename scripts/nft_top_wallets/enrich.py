@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import csv
+import math
 import os
 from dataclasses import dataclass, field
 
@@ -17,9 +18,18 @@ from .alchemy import AlchemyClient
 from .config import BLUECHIP_CONTRACTS, Settings, ZERO_ADDRESS
 
 # Нормировочные "потолки" сигналов (значение >= cap => сигнал 1.0)
-BLUECHIP_CAP = float(os.getenv("BLUECHIP_CAP", "5"))
+BLUECHIP_CAP = float(os.getenv("BLUECHIP_CAP", "20"))       # число blue-chip NFT (лог-шкала)
+BLUECHIP_COLL_CAP = float(os.getenv("BLUECHIP_COLL_CAP", "4"))  # число разных blue-chip коллекций
+BALANCE_CAP = float(os.getenv("BALANCE_CAP", "10"))        # баланс в нативном токене (лог-шкала)
 FLIP_CAP = float(os.getenv("FLIP_CAP", "10"))
 PNL_CAP = float(os.getenv("PNL_CAP", "5"))  # в нативном токене
+
+
+def _log_ratio(value: float, cap: float) -> float:
+    """Лог-нормировка: 0 при value=0, ~1 при value>=cap. Сжимает «китов»."""
+    if value <= 0 or cap <= 0:
+        return 0.0
+    return _clamp01(math.log1p(value) / math.log1p(cap))
 
 
 @dataclass
@@ -218,8 +228,20 @@ def _clamp01(x: float) -> float:
     return max(0.0, min(1.0, x))
 
 
-def score_wallet(f: WalletFeatures, weights: dict) -> float:
-    bluechip_sig = _clamp01(f.bluechip_count / BLUECHIP_CAP)
+def score_wallet(f: WalletFeatures, weights: dict, have_sales: bool = True) -> float:
+    """Взвешенный скор 0..100.
+
+    Сигналы непрерывные там, где возможно (blue-chip, баланс, флипы), чтобы топ
+    не «слипался» в одинаковые значения. ``have_sales=False`` (сеть без getNFTSales)
+    => PnL всегда 0, поэтому его вес перераспределяется на остальные сигналы,
+    иначе шкала теряет пятую часть диапазона.
+    """
+    # smart money: разнообразие blue-chip коллекций важнее сырого числа NFT
+    bluechip_sig = (
+        0.65 * _clamp01(f.bluechip_collections / BLUECHIP_COLL_CAP)
+        + 0.35 * _log_ratio(f.bluechip_count, BLUECHIP_CAP)
+    )
+    whale_sig = _log_ratio(f.eth_balance, BALANCE_CAP)
     degen_sig = _clamp01(f.num_flips / FLIP_CAP)
     if f.is_early_buyer:
         early_sig = 1.0
@@ -227,15 +249,24 @@ def score_wallet(f: WalletFeatures, weights: dict) -> float:
         early_sig = 0.6
     else:
         early_sig = 0.0
-    kol_sig = 1.0 if any(l.startswith(("KOL:", "SM:")) for l in f.labels) or f.ens else 0.0
+    # ENS больше НЕ участвует в KOL (он слишком распространён — только для отображения)
+    kol_sig = 1.0 if any(l.startswith(("KOL:", "SM:")) for l in f.labels) else 0.0
     pnl_sig = _clamp01(f.realized_pnl / PNL_CAP) if f.realized_pnl > 0 else 0.0
 
-    score = (
-        weights["bluechip"] * bluechip_sig
-        + weights["degen"] * degen_sig
-        + weights["early"] * early_sig
-        + weights["kol"] * kol_sig
-        + weights["pnl"] * pnl_sig
-    )
+    sigs = {
+        "bluechip": bluechip_sig,
+        "whale": whale_sig,
+        "degen": degen_sig,
+        "early": early_sig,
+        "kol": kol_sig,
+        "pnl": pnl_sig,
+    }
+    # активные веса: если продаж нет — PnL мёртв, убираем его из знаменателя
+    active = {k: weights.get(k, 0.0) for k in sigs}
+    if not have_sales:
+        active["pnl"] = 0.0
+    total_w = sum(active.values()) or 1.0
+
+    score = sum(active[k] * sigs[k] for k in sigs) / total_w
     f.total_score = round(score * 100, 2)
     return f.total_score

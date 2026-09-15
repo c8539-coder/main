@@ -17,6 +17,7 @@ import time
 
 from .alchemy import AlchemyClient
 from .config import KOL_LIST_PATH, SMART_MONEY_LIST_PATH, Settings
+from .ens import resolve_many as resolve_ens_many
 from .enrich import (
     WalletFeatures,
     score_wallet,
@@ -68,6 +69,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--no-mainnet", action="store_true",
         help="Не ходить на eth-mainnet за blue-chip (smart-money=0)",
+    )
+    p.add_argument(
+        "--ens", type=int, default=100,
+        help="Резолвить ENS-имена для top-N кошельков (0 = выключить). Только отображение.",
     )
     p.add_argument("--out", default=OUT_DIR, help="Каталог для CSV")
     return p.parse_args(argv)
@@ -135,9 +140,9 @@ def run(argv: list[str] | None = None) -> int:
     print("[5/5] Размечаю KOL/curated…")
     tag_kol(feats, KOL_LIST_PATH, SMART_MONEY_LIST_PATH)
 
-    # скоринг
+    # скоринг (PnL-вес перераспределяется, если продажи недоступны на сети)
     for f in feats.values():
-        score_wallet(f, settings.weights)
+        score_wallet(f, settings.weights, have_sales=have_sales)
 
     # ранжируем только текущих холдеров (те, кто реально держит коллекцию)
     ranked = sorted(
@@ -145,6 +150,17 @@ def run(argv: list[str] | None = None) -> int:
         key=lambda f: f.total_score,
         reverse=True,
     )
+
+    # ENS-имена для верхушки (только отображение, на скор не влияют).
+    # Резолвим после ранжирования и лишь top-N, чтобы не жечь лимиты.
+    if mainnet is not None and args.ens > 0 and ranked:
+        head = ranked[: args.ens]
+        print(f"[+] Резолвлю ENS для top-{len(head)}…")
+        names = resolve_ens_many(mainnet, [f.address for f in head])
+        for f in head:
+            f.ens = names.get(f.address, "")
+        if names:
+            print(f"      найдено имён: {len(names)}")
 
     # вывод
     os.makedirs(args.out, exist_ok=True)
@@ -167,9 +183,9 @@ def _print_table(rows: list[WalletFeatures]) -> None:
     if not rows:
         print("Нет данных.")
         return
-    print(f"\n{'#':>3}  {'score':>6}  {'address':<42}  {'held':>4}  "
-          f"{'flips':>5}  {'pnl':>8}  {'bc':>3}  labels")
-    print("-" * 100)
+    print(f"\n{'#':>3}  {'score':>6}  {'address / ens':<42}  {'held':>4}  "
+          f"{'flips':>5}  {'ethβ':>8}  {'bc':>3}  labels")
+    print("-" * 108)
     for i, f in enumerate(rows, 1):
         tags = ",".join(t for t in (
             "M" if f.is_minter else "",
@@ -177,8 +193,9 @@ def _print_table(rows: list[WalletFeatures]) -> None:
             "F" if f.profitable_flipper else "",
         ) if t)
         labels = ";".join(sorted(set(f.labels)))[:30]
-        print(f"{i:>3}  {f.total_score:>6.1f}  {f.address:<42}  {f.tokens_held:>4}  "
-              f"{f.num_flips:>5}  {f.realized_pnl:>8.3f}  {f.bluechip_count:>3}  "
+        who = f.ens or f.address
+        print(f"{i:>3}  {f.total_score:>6.1f}  {who:<42}  {f.tokens_held:>4}  "
+              f"{f.num_flips:>5}  {f.eth_balance:>8.3f}  {f.bluechip_count:>3}  "
               f"{tags} {labels}".rstrip())
 
 
