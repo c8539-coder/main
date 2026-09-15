@@ -24,13 +24,11 @@ BALANCE_CAP = float(os.getenv("BALANCE_CAP", "10"))        # баланс в н�
 HELD_CAP = float(os.getenv("HELD_CAP", "9"))               # NFT коллекции сверх 1 (лог-шкала): 10 шт = максимум
 FLIP_CAP = float(os.getenv("FLIP_CAP", "10"))
 PNL_CAP = float(os.getenv("PNL_CAP", "5"))  # в нативном токене
-# Команда/трежери = батч-минт аллокации. Порог адаптивный: кошелёк считается
-# командой, если заминтил >= max(TEAM_MINT_MIN, TEAM_SUPPLY_SHARE * весь_минт).
-# Абсолютный минимум (TEAM_MINT_MIN) защищает крошечные коллекции; доля от саплая
-# (TEAM_SUPPLY_SHARE) не даёт ложно пометить обычных минтеров в открытых минтах,
-# где люди легально минтят помногу.
-TEAM_MINT_MIN = int(os.getenv("TEAM_MINT_MIN", "10"))
-TEAM_SUPPLY_SHARE = float(os.getenv("TEAM_SUPPLY_SHARE", "0.01"))  # 1% всего минта
+# Команда/трежери = батч-минт аллокации в ОДНОМ блоке. Ключевое отличие от кита
+# открытого минта: команда минтит большую пачку одной транзакцией/в одном блоке,
+# а кит/бот открытого минта набирает по чуть-чуть в течение тысяч блоков. Поэтому
+# считаем командой того, у кого max минтов в одном блоке >= TEAM_BATCH_MIN.
+TEAM_BATCH_MIN = int(os.getenv("TEAM_BATCH_MIN", "50"))
 
 
 def _log_ratio(value: float, cap: float) -> float:
@@ -48,6 +46,7 @@ class WalletFeatures:
     is_minter: bool = False
     is_early_buyer: bool = False
     mint_count: int = 0          # сколько токенов заминтил (from 0x0)
+    mint_batch: int = 0          # макс. минтов в одном блоке (признак батч-аллокации)
     is_team: bool = False        # батч-минтер аллокации (команда/трежери)
     # degen / pnl (в пределах анализируемой коллекции)
     buys: int = 0
@@ -93,6 +92,7 @@ def tag_early(client: AlchemyClient, contract: str, settings: Settings,
     """
     first_acq: list[tuple[str, bool]] = []  # (wallet, via_mint) в порядке появления
     seen: set[str] = set()
+    block_run: dict[str, tuple[int, int]] = {}  # wallet -> (последний блок, счётчик в нём)
 
     for t in client.asset_transfers(contract=contract, order="asc"):
         to = (t.get("to") or "").lower()
@@ -103,16 +103,21 @@ def tag_early(client: AlchemyClient, contract: str, settings: Settings,
             f = feats.setdefault(to, WalletFeatures(address=to))
             f.is_minter = True
             f.mint_count += 1
+            # макс. минтов в одном блоке (batch): трансферы идут по возрастанию
+            blk = int(t["blockNum"], 16) if t.get("blockNum") else -1
+            last_blk, run = block_run.get(to, (None, 0))
+            run = run + 1 if blk == last_blk else 1
+            block_run[to] = (blk, run)
+            if run > f.mint_batch:
+                f.mint_batch = run
         if to not in seen:
             seen.add(to)
             first_acq.append((to, via_mint))
 
-    # команда/трежери: батч-минтеры аллокации. Порог адаптивный от объёма минта,
-    # чтобы не путать команду с обычными минтерами в открытых минтах.
-    total_minted = sum(f.mint_count for f in feats.values())
-    threshold = max(TEAM_MINT_MIN, TEAM_SUPPLY_SHARE * total_minted)
+    # команда/трежери: батч-минт аллокации в одном блоке (одной пачкой), в отличие
+    # от кита открытого минта, который набирает по чуть-чуть в течение многих блоков.
     for f in feats.values():
-        if f.mint_count >= threshold:
+        if f.mint_batch >= TEAM_BATCH_MIN:
             f.is_team = True
 
     # ранние покупатели: первые N% по НЕ-минтовым первым приобретениям

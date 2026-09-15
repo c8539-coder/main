@@ -19,8 +19,7 @@ from .alchemy import AlchemyClient
 from .config import KOL_LIST_PATH, SMART_MONEY_LIST_PATH, Settings
 from .ens import resolve_many as resolve_ens_many
 from .enrich import (
-    TEAM_MINT_MIN,
-    TEAM_SUPPLY_SHARE,
+    TEAM_BATCH_MIN,
     WalletFeatures,
     score_wallet,
     tag_degen,
@@ -33,7 +32,7 @@ OUT_DIR = os.path.join(os.path.dirname(__file__), "out")
 
 CSV_COLUMNS = [
     "address", "ens", "tokens_held", "is_minter", "is_early_buyer",
-    "mint_count", "is_team",
+    "mint_count", "mint_batch", "is_team",
     "buys", "sells", "buy_and_flip", "mint_and_flip", "profitable_flipper",
     "realized_pnl", "bluechip_count", "bluechip_collections", "eth_balance",
     "labels", "total_score",
@@ -48,6 +47,7 @@ def _row(f: WalletFeatures) -> dict:
         "is_minter": int(f.is_minter),
         "is_early_buyer": int(f.is_early_buyer),
         "mint_count": f.mint_count,
+        "mint_batch": f.mint_batch,
         "is_team": int(f.is_team),
         "buys": f.buys,
         "sells": f.sells,
@@ -186,10 +186,8 @@ def run(argv: list[str] | None = None) -> int:
 
     _print_table(display[: args.top])
     if n_team:
-        total_minted = sum(f.mint_count for f in feats.values())
-        threshold = int(max(TEAM_MINT_MIN, TEAM_SUPPLY_SHARE * total_minted))
         note = "включена (--keep-team)" if args.keep_team else "исключена из лидерборда"
-        print(f"[i] команда/трежери: {n_team} кош. (батч-минт ≥{threshold}) — {note}")
+        print(f"[i] команда/трежери: {n_team} кош. (батч ≥{TEAM_BATCH_MIN} минтов в одном блоке) — {note}")
     print(f"\n[✓] Готово за {time.time() - t0:.1f}s. CSV: {csv_path}")
     print(f"    Холдеров: {len(ranked)} | в лидерборде: {len(display)} | показано: "
           f"{min(args.top, len(display))}")
