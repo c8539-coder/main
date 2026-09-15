@@ -24,9 +24,13 @@ BALANCE_CAP = float(os.getenv("BALANCE_CAP", "10"))        # баланс в н�
 HELD_CAP = float(os.getenv("HELD_CAP", "9"))               # NFT коллекции сверх 1 (лог-шкала): 10 шт = максимум
 FLIP_CAP = float(os.getenv("FLIP_CAP", "10"))
 PNL_CAP = float(os.getenv("PNL_CAP", "5"))  # в нативном токене
-# Кошелёк, заминтивший >= этого числа токенов, считаем командой/трежери
-# (батч-минт аллокации), а не органическим ранним участником.
+# Команда/трежери = батч-минт аллокации. Порог адаптивный: кошелёк считается
+# командой, если заминтил >= max(TEAM_MINT_MIN, TEAM_SUPPLY_SHARE * весь_минт).
+# Абсолютный минимум (TEAM_MINT_MIN) защищает крошечные коллекции; доля от саплая
+# (TEAM_SUPPLY_SHARE) не даёт ложно пометить обычных минтеров в открытых минтах,
+# где люди легально минтят помногу.
 TEAM_MINT_MIN = int(os.getenv("TEAM_MINT_MIN", "10"))
+TEAM_SUPPLY_SHARE = float(os.getenv("TEAM_SUPPLY_SHARE", "0.01"))  # 1% всего минта
 
 
 def _log_ratio(value: float, cap: float) -> float:
@@ -103,9 +107,12 @@ def tag_early(client: AlchemyClient, contract: str, settings: Settings,
             seen.add(to)
             first_acq.append((to, via_mint))
 
-    # команда/трежери: батч-минтеры аллокации
+    # команда/трежери: батч-минтеры аллокации. Порог адаптивный от объёма минта,
+    # чтобы не путать команду с обычными минтерами в открытых минтах.
+    total_minted = sum(f.mint_count for f in feats.values())
+    threshold = max(TEAM_MINT_MIN, TEAM_SUPPLY_SHARE * total_minted)
     for f in feats.values():
-        if f.mint_count >= TEAM_MINT_MIN:
+        if f.mint_count >= threshold:
             f.is_team = True
 
     # ранние покупатели: первые N% по НЕ-минтовым первым приобретениям
