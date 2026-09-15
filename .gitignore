@@ -20,3 +20,6 @@ env/
 .DS_Store
 .idea/
 .vscode/
+
+# NFT top-wallets script: generated CSV output
+scripts/nft_top_wallets/out/
