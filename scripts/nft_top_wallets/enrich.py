@@ -178,10 +178,14 @@ def tag_smart_money(mainnet: AlchemyClient | None, feats: dict[str, WalletFeatur
         except RuntimeError:
             nfts = []
         f.bluechip_count = len(nfts)
+        # withMetadata=false отдаёт плоский "contractAddress"; с метаданными —
+        # вложенный "contract.address". Поддерживаем оба.
         collections = {
-            (n.get("contract", {}).get("address") or "").lower() for n in nfts
+            (n.get("contractAddress") or n.get("contract", {}).get("address") or "").lower()
+            for n in nfts
         }
-        f.bluechip_collections = len({c for c in collections if c})
+        collections.discard("")
+        f.bluechip_collections = len(collections)
         try:
             f.eth_balance = mainnet.eth_balance(addr)
         except RuntimeError:
