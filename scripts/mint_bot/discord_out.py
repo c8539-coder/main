@@ -57,14 +57,13 @@ def build_embed(*, name: str, chain: str, contract: str,
     )
     more = f" · … и ещё {n - 10}" if n > 10 else ""
     icon = "🔥" if hot else "🌱"
-    # название коллекции — обычной строкой; View Collection сразу под ней; Explorer внизу
-    top = f"{icon} {n} Wallet Minting {name}\n{breakdown}\n🔗 [View Collection]({os_url})"
-    parts = [top, f"{sample}{more}"]
-    if exp:
-        parts.append(f"🔎 [Explorer]({exp})")
+    # ссылки внизу рядом
+    links = f"🔗 [View Collection]({os_url})" + (f" · 🔎 [Explorer]({exp})" if exp else "")
     return {
-        "description": "\n\n".join(parts),
+        # заголовок embed — жирная первая строка с названием коллекции
+        "title": f"{icon} {n} Wallet Minting {name}",
         "url": os_url,
+        "description": f"{breakdown}\n\n{sample}{more}\n\n{links}",
         "color": TYPE_COLOR.get(dominant, DEFAULT_COLOR),
         "footer": {"text": "Wallet mint tracker"},
     }
