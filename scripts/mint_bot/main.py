@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import time
 
 try:
@@ -91,6 +92,16 @@ def run() -> None:
     watchlist = load_watchlist(watch_paths, min_score=min_score)
     if not watchlist:
         raise SystemExit(f"Пустой watchlist. Проверьте WATCHLIST_FILES={watch_paths}")
+
+    # тестовый режим: отправить один пример-алерт в канал и выйти
+    if "--test" in sys.argv or os.getenv("MINT_TEST"):
+        sample = dict(list(watchlist.items())[:6]) or {"0x0000000000000000000000000000000000000000": "SMART"}
+        embed = build_embed(name="TEST — Bored Ape Yacht Club", chain="eth-mainnet",
+                            contract="0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d",
+                            wallets=sample, hot=bool(role_id))
+        post_alert(webhook, embed, role_id=role_id)
+        log.info("Тестовый алерт отправлен в канал (%d кош.).", len(sample))
+        return
 
     settings = Settings.load()
     clients = _build_clients(settings, chains)
