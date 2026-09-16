@@ -18,13 +18,15 @@ class Alert:
     contract: str
     name: str
     wallets: dict[str, str]  # address -> type
+    ping: bool = False       # пинговать ли роль (крупный сигнal)
 
 
 @dataclass
 class MintTracker:
     watchlist: dict[str, str]                 # address_lower -> TYPE
     clients: dict[str, AlchemyClient]         # chain name -> client
-    min_wallets: int = 5
+    min_wallets: int = 5                      # порог для тихого алерта (без пинга)
+    ping_wallets: int = 15                    # порог, с которого пингуем роль
     window_seconds: int = 6 * 3600            # окно, в котором копим минты по контракту
     backfill_blocks: int = 300                # сколько блоков назад смотреть на первом старте
     state: dict = field(default_factory=lambda: {"last_block": {}, "contracts": {}})
@@ -66,15 +68,28 @@ class MintTracker:
         self.state["last_block"][chain] = current
 
     def _collect_alerts(self) -> list[Alert]:
+        """Тихий алерт при >= min_wallets, отдельный алерт с пингом при >= ping_wallets.
+
+        Контракт может дать до двух алертов: тихий (набрал 5) и, если дорос до 15,
+        второй с пингом роли.
+        """
         alerts: list[Alert] = []
         for key, entry in self.state["contracts"].items():
-            if entry["alerted"] or len(entry["wallets"]) < self.min_wallets:
+            n = len(entry["wallets"])
+            hit_base = n >= self.min_wallets and not entry.get("alerted")
+            hit_ping = n >= self.ping_wallets and not entry.get("pinged")
+            if not (hit_base or hit_ping):
                 continue
             chain, contract = key.split("|", 1)
             if not entry["name"]:
                 entry["name"] = self._contract_name(chain, contract)
+            ping = hit_ping
             entry["alerted"] = True
-            alerts.append(Alert(chain, contract, entry["name"], dict(entry["wallets"])))
+            if ping:
+                entry["pinged"] = True
+            alerts.append(
+                Alert(chain, contract, entry["name"], dict(entry["wallets"]), ping=ping)
+            )
         return alerts
 
     def _prune(self, now: float) -> None:

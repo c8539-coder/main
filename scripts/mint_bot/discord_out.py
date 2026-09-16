@@ -23,8 +23,11 @@ def _explorer(chain: str, contract: str) -> str:
 
 
 def build_embed(*, name: str, chain: str, contract: str,
-                wallets: dict[str, str]) -> dict:
-    """Собрать Discord-embed под алерт «N кошельков минтят коллекцию»."""
+                wallets: dict[str, str], hot: bool = False) -> dict:
+    """Собрать Discord-embed под алерт «N кошельков минтят коллекцию».
+
+    ``hot=True`` (крупный сигнал, с пингом роли) помечает алерт огоньком.
+    """
     by_type = Counter(wallets.values())
     n = len(wallets)
     breakdown = " · ".join(f"{t} {c}" for t, c in by_type.most_common())
@@ -34,8 +37,9 @@ def build_embed(*, name: str, chain: str, contract: str,
         f"`{a[:6]}…{a[-4:]}` {t}" for a, t in list(wallets.items())[:10]
     )
     more = f"\n… и ещё {n - 10}" if n > 10 else ""
+    icon = "🔥" if hot else "🌱"
     return {
-        "title": f"🌱 {n} Wallet Minting {name}",
+        "title": f"{icon} {n} Wallet Minting {name}",
         "description": f"**{breakdown}**\n\n{sample}{more}",
         "url": _explorer(chain, contract),
         "color": TYPE_COLOR.get(dominant, DEFAULT_COLOR),
