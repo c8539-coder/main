@@ -77,6 +77,7 @@ def run() -> None:
     role_id = os.getenv("DISCORD_ROLE_ID", "").strip() or None
     min_wallets = int(os.getenv("MINT_ALERT_MIN", "5"))
     ping_wallets = int(os.getenv("MINT_PING_MIN", "15"))
+    ping_step = int(os.getenv("MINT_PING_STEP", "15"))
     poll_s = max(15, int(os.getenv("MINT_POLL_SECONDS", "60")))
     window_s = int(os.getenv("MINT_WINDOW_SECONDS", str(6 * 3600)))
     backfill = int(os.getenv("MINT_BACKFILL_BLOCKS", "300"))
@@ -95,7 +96,8 @@ def run() -> None:
     clients = _build_clients(settings, chains)
     tracker = MintTracker(
         watchlist=watchlist, clients=clients, min_wallets=min_wallets,
-        ping_wallets=ping_wallets, window_seconds=window_s, backfill_blocks=backfill,
+        ping_wallets=ping_wallets, ping_step=ping_step,
+        window_seconds=window_s, backfill_blocks=backfill,
         state=_load_state(state_file),
     )
 

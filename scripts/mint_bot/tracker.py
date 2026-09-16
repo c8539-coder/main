@@ -27,6 +27,7 @@ class MintTracker:
     clients: dict[str, AlchemyClient]         # chain name -> client
     min_wallets: int = 5                      # порог для тихого алерта (без пинга)
     ping_wallets: int = 15                    # порог, с которого пингуем роль
+    ping_step: int = 15                       # повторный пинг каждые +N кошельков (0 = только раз)
     window_seconds: int = 6 * 3600            # окно, в котором копим минты по контракту
     backfill_blocks: int = 300                # сколько блоков назад смотреть на первом старте
     state: dict = field(default_factory=lambda: {"last_block": {}, "contracts": {}})
@@ -76,19 +77,24 @@ class MintTracker:
         alerts: list[Alert] = []
         for key, entry in self.state["contracts"].items():
             n = len(entry["wallets"])
+            last_ping = entry.get("pinged_at", 0)
             hit_base = n >= self.min_wallets and not entry.get("alerted")
-            hit_ping = n >= self.ping_wallets and not entry.get("pinged")
+            # первый пинг при ping_wallets; повторный — когда прибавилось ping_step
+            if last_ping == 0:
+                hit_ping = n >= self.ping_wallets
+            else:
+                hit_ping = self.ping_step > 0 and n >= last_ping + self.ping_step
             if not (hit_base or hit_ping):
                 continue
             chain, contract = key.split("|", 1)
             if not entry["name"]:
                 entry["name"] = self._contract_name(chain, contract)
-            ping = hit_ping
             entry["alerted"] = True
-            if ping:
+            if hit_ping:
                 entry["pinged"] = True
+                entry["pinged_at"] = n
             alerts.append(
-                Alert(chain, contract, entry["name"], dict(entry["wallets"]), ping=ping)
+                Alert(chain, contract, entry["name"], dict(entry["wallets"]), ping=hit_ping)
             )
         return alerts
 
