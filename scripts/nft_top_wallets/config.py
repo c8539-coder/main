@@ -1,7 +1,7 @@
-"""Конфигурация сборщика топ-кошельков.
+"""Configuration for the top-wallets collector.
 
-Все секреты берутся ТОЛЬКО из окружения (см. .env.example). В код/git ничего
-секретного не попадает.
+All secrets come ONLY from the environment (see .env.example). Nothing secret
+is committed to code/git.
 """
 
 from __future__ import annotations
@@ -13,29 +13,29 @@ try:
     from dotenv import load_dotenv
 
     load_dotenv()
-except Exception:  # python-dotenv необязателен, если переменные уже в env
+except Exception:  # python-dotenv is optional if vars are already in the env
     pass
 
 
-# --- Нулевой адрес: source транзакции = mint ---
+# --- Zero address: transfer source = mint ---
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 
 # ---------------------------------------------------------------------------
-# Сети Alchemy
+# Alchemy networks
 # ---------------------------------------------------------------------------
-# Основная сеть коллекции. Endpoint передаётся целиком (вместе с ключом) в
-# ALCHEMY_RPC_URL, либо собирается из ALCHEMY_NETWORK + ALCHEMY_API_KEY.
+# Collection chain. The endpoint is passed whole (with the key) in
+# ALCHEMY_RPC_URL, or built from ALCHEMY_NETWORK + ALCHEMY_API_KEY.
 def _network_base(network: str, api_key: str) -> str:
     return f"https://{network}.g.alchemy.com"
 
 
 @dataclass
 class NetworkConfig:
-    """Один Alchemy-эндпоинт (RPC + NFT API живут на одном хосте)."""
+    """One Alchemy endpoint (RPC + NFT API share a host)."""
 
-    name: str          # напр. "robinhood-mainnet"
-    base_url: str      # напр. "https://robinhood-mainnet.g.alchemy.com"
+    name: str          # e.g. "robinhood-mainnet"
+    base_url: str      # e.g. "https://robinhood-mainnet.g.alchemy.com"
     api_key: str
 
     @property
@@ -55,14 +55,14 @@ class NetworkConfig:
         default_network: str,
         api_key: str,
     ) -> "NetworkConfig | None":
-        """Собрать конфиг сети из окружения.
+        """Build a network config from the environment.
 
-        Приоритет: полный URL из ``url_var`` (напр. ALCHEMY_RPC_URL), иначе
-        ``network`` + общий ключ.
+        Priority: the full URL in ``url_var`` (e.g. ALCHEMY_RPC_URL), otherwise
+        ``network`` + a shared key.
         """
         full = os.getenv(url_var, "").strip()
         if full:
-            # Формат: https://<net>.g.alchemy.com/v2/<key>
+            # Format: https://<net>.g.alchemy.com/v2/<key>
             base = full.split("/v2/")[0].split("/nft/")[0].rstrip("/")
             key = api_key
             if "/v2/" in full:
@@ -79,32 +79,32 @@ class NetworkConfig:
 
 
 # ---------------------------------------------------------------------------
-# Общая конфигурация запуска
+# General run configuration
 # ---------------------------------------------------------------------------
 @dataclass
 class Settings:
-    # Основная сеть коллекции (Robinhood mainnet)
+    # Collection chain (Robinhood mainnet)
     chain: NetworkConfig
-    # Сеть для blue-chip обогащения (Ethereum mainnet); None => smart-money
-    # деградирует до сигналов внутри основной сети.
+    # Chain for blue-chip enrichment (Ethereum mainnet); None => smart-money
+    # degrades to signals within the collection chain.
     mainnet: "NetworkConfig | None"
 
-    # Контракт коллекции по умолчанию (можно переопределить CLI)
+    # Default collection contract (can be overridden via CLI)
     default_contract: str = os.getenv(
         "COLLECTION_CONTRACT", "0x116eaa62241751e0c98da43d458600c6c17cd361"
     )
 
-    # Троттлинг / ретраи
+    # Throttling / retries
     request_delay_s: float = float(os.getenv("REQUEST_DELAY_S", "0.12"))
     max_retries: int = int(os.getenv("MAX_RETRIES", "5"))
     backoff_base_s: float = float(os.getenv("BACKOFF_BASE_S", "1.5"))
     timeout_s: float = float(os.getenv("REQUEST_TIMEOUT_S", "30"))
 
-    # "Ранний" вход: доля первых по времени приобретателей, помечаемых early_buyer
+    # "Early" entry: fraction of earliest-by-time acquirers flagged as early_buyer
     early_buyer_fraction: float = float(os.getenv("EARLY_BUYER_FRACTION", "0.15"))
 
-    # Веса скоринга (нормализованные сигналы 0..1)
-    # Три группы: smart (blue-chip + баланс кита), degen (флипы), early (минт/ранний).
+    # Scoring weights (normalized signals 0..1)
+    # Three groups: smart (blue-chip + whale balance), degen (flips), early (mint/early).
     weights: dict = field(
         default_factory=lambda: {
             "smart": float(os.getenv("W_SMART", "0.50")),
@@ -125,8 +125,8 @@ class Settings:
         )
         if chain is None:
             raise SystemExit(
-                "Не задан доступ к Alchemy. Укажите ALCHEMY_RPC_URL "
-                "(полный endpoint с ключом) или ALCHEMY_API_KEY + ALCHEMY_NETWORK."
+                "No Alchemy access configured. Set ALCHEMY_RPC_URL "
+                "(full endpoint with key) or ALCHEMY_API_KEY + ALCHEMY_NETWORK."
             )
 
         mainnet = NetworkConfig.from_env(
@@ -140,9 +140,9 @@ class Settings:
 
 
 # ---------------------------------------------------------------------------
-# Curated-списки (можно расширять)
+# Curated lists (extendable)
 # ---------------------------------------------------------------------------
-# Blue-chip коллекции на Ethereum mainnet — по ним считаем "smart money".
+# Blue-chip collections on Ethereum mainnet -> used to score "smart money".
 BLUECHIP_CONTRACTS: dict[str, str] = {
     "0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d": "BAYC",
     "0x60e4d786628fea6478f785a6d7e704777c86a7c6": "MAYC",
@@ -156,7 +156,7 @@ BLUECHIP_CONTRACTS: dict[str, str] = {
     "0x1a92f7381b9f03921564a437210bb9396471050c": "CoolCats",
 }
 
-# Пути к пополняемым CSV-спискам (address[,label]); используются, если существуют.
+# Paths to extendable CSV lists (address[,label]); used if present.
 KOL_LIST_PATH = os.getenv(
     "KOL_LIST_PATH",
     os.path.join(os.path.dirname(__file__), "lists", "kol_wallets.csv"),

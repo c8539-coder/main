@@ -1,1 +1,1 @@
-"""Минт-трекер: алерт в Discord, когда N наших кошельков минтят одну коллекцию."""
+"""Mint tracker: alert Discord when N tracked wallets mint the same collection."""

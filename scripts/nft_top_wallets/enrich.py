@@ -1,10 +1,10 @@
-"""Обогащение кошельков сигналами и скоринг.
+"""Enrich wallets with signals and score them.
 
-Сигналы:
-  * early   — минтеры + ранние покупатели (по логам контракта, order=asc)
-  * degen   — buy-and-flip и mint-and-flip с расчётом реализованного PnL
-  * smart   — blue-chip NFT + баланс (кросс-чейн, Ethereum mainnet)
-  * kol     — curated-список адресов + опц. ENS
+Signals:
+  * early   - minters + early buyers (by contract logs, order=asc)
+  * degen   - buy-and-flip and mint-and-flip with realized PnL
+  * smart   - blue-chip NFTs + balance (cross-chain, Ethereum mainnet)
+  * kol     - curated address list + optional ENS
 """
 
 from __future__ import annotations
@@ -17,22 +17,22 @@ from dataclasses import dataclass, field
 from .alchemy import AlchemyClient
 from .config import BLUECHIP_CONTRACTS, Settings, ZERO_ADDRESS
 
-# Нормировочные "потолки" сигналов (значение >= cap => сигнал 1.0)
-BLUECHIP_CAP = float(os.getenv("BLUECHIP_CAP", "20"))       # число blue-chip NFT (лог-шкала)
-BLUECHIP_COLL_CAP = float(os.getenv("BLUECHIP_COLL_CAP", "4"))  # число разных blue-chip коллекций
-BALANCE_CAP = float(os.getenv("BALANCE_CAP", "10"))        # баланс в нативном токене (лог-шкала)
-HELD_CAP = float(os.getenv("HELD_CAP", "9"))               # NFT коллекции сверх 1 (лог-шкала): 10 шт = максимум
+# Signal caps (value >= cap => signal 1.0)
+BLUECHIP_CAP = float(os.getenv("BLUECHIP_CAP", "20"))       # number of blue-chip NFTs (log scale)
+BLUECHIP_COLL_CAP = float(os.getenv("BLUECHIP_COLL_CAP", "4"))  # number of distinct blue-chip collections
+BALANCE_CAP = float(os.getenv("BALANCE_CAP", "10"))        # native token balance (log scale)
+HELD_CAP = float(os.getenv("HELD_CAP", "9"))               # collection NFTs above 1 (log scale): 10 = max
 FLIP_CAP = float(os.getenv("FLIP_CAP", "10"))
-PNL_CAP = float(os.getenv("PNL_CAP", "5"))  # в нативном токене
-# Команда/трежери = батч-минт аллокации в ОДНОМ блоке. Ключевое отличие от кита
-# открытого минта: команда минтит большую пачку одной транзакцией/в одном блоке,
-# а кит/бот открытого минта набирает по чуть-чуть в течение тысяч блоков. Поэтому
-# считаем командой того, у кого max минтов в одном блоке >= TEAM_BATCH_MIN.
+PNL_CAP = float(os.getenv("PNL_CAP", "5"))  # in native token
+# Team/treasury = allocation batch-minted in ONE block. Key difference from an
+# open-mint whale: a team mints a big batch in one transaction/block, while an
+# open-mint whale/bot accumulates a bit at a time over thousands of blocks. So we
+# treat a wallet as team when its max mints in a single block >= TEAM_BATCH_MIN.
 TEAM_BATCH_MIN = int(os.getenv("TEAM_BATCH_MIN", "50"))
 
 
 def _log_ratio(value: float, cap: float) -> float:
-    """Лог-нормировка: 0 при value=0, ~1 при value>=cap. Сжимает «китов»."""
+    """Log normalization: 0 at value=0, ~1 at value>=cap. Compresses whales."""
     if value <= 0 or cap <= 0:
         return 0.0
     return _clamp01(math.log1p(value) / math.log1p(cap))
@@ -45,10 +45,10 @@ class WalletFeatures:
     # early
     is_minter: bool = False
     is_early_buyer: bool = False
-    mint_count: int = 0          # сколько токенов заминтил (from 0x0)
-    mint_batch: int = 0          # макс. минтов в одном блоке (признак батч-аллокации)
-    is_team: bool = False        # батч-минтер аллокации (команда/трежери)
-    # degen / pnl (в пределах анализируемой коллекции)
+    mint_count: int = 0          # tokens minted (from 0x0)
+    mint_batch: int = 0          # max mints in one block (batch-allocation signal)
+    is_team: bool = False        # allocation batch-minter (team/treasury)
+    # degen / pnl (within the analyzed collection)
     buys: int = 0
     sells: int = 0
     buy_and_flip: bool = False
@@ -61,7 +61,7 @@ class WalletFeatures:
     # kol
     ens: str = ""
     labels: list[str] = field(default_factory=list)
-    # итог
+    # result
     total_score: float = 0.0
 
     @property
@@ -78,21 +78,20 @@ class WalletFeatures:
 
 
 # ---------------------------------------------------------------------------
-# 1. EARLY: минтеры + ранние покупатели
+# 1. EARLY: minters + early buyers
 # ---------------------------------------------------------------------------
 def tag_early(client: AlchemyClient, contract: str, settings: Settings,
               feats: dict[str, WalletFeatures]) -> None:
-    """Пройти все входящие трансферы контракта по возрастанию времени.
+    """Walk all incoming contract transfers in ascending time order.
 
-    Первое приобретение каждого кошелька задаёт его "ранг". Минт (from 0x0)
-    => is_minter. Первые ``early_buyer_fraction`` НЕ-минтовых приобретателей
-    => is_early_buyer. Кошелёк, заминтивший >= ``TEAM_MINT_MIN`` токенов
-    (батч-минт аллокации), помечается ``is_team`` — это команда/трежери, а не
-    органический ранний участник.
+    Each wallet's first acquisition sets its "rank". A mint (from 0x0) =>
+    is_minter. The first ``early_buyer_fraction`` NON-mint acquirers =>
+    is_early_buyer. A wallet that batch-mints >= ``TEAM_BATCH_MIN`` tokens in one
+    block is flagged ``is_team`` - team/treasury, not an organic early participant.
     """
-    first_acq: list[tuple[str, bool]] = []  # (wallet, via_mint) в порядке появления
+    first_acq: list[tuple[str, bool]] = []  # (wallet, via_mint) in order of appearance
     seen: set[str] = set()
-    block_run: dict[str, tuple[int, int]] = {}  # wallet -> (последний блок, счётчик в нём)
+    block_run: dict[str, tuple[int, int]] = {}  # wallet -> (last block, count in it)
 
     for t in client.asset_transfers(contract=contract, order="asc"):
         to = (t.get("to") or "").lower()
@@ -103,7 +102,7 @@ def tag_early(client: AlchemyClient, contract: str, settings: Settings,
             f = feats.setdefault(to, WalletFeatures(address=to))
             f.is_minter = True
             f.mint_count += 1
-            # макс. минтов в одном блоке (batch): трансферы идут по возрастанию
+            # max mints in one block (batch): transfers come in ascending order
             blk = int(t["blockNum"], 16) if t.get("blockNum") else -1
             last_blk, run = block_run.get(to, (None, 0))
             run = run + 1 if blk == last_blk else 1
@@ -114,13 +113,13 @@ def tag_early(client: AlchemyClient, contract: str, settings: Settings,
             seen.add(to)
             first_acq.append((to, via_mint))
 
-    # команда/трежери: батч-минт аллокации в одном блоке (одной пачкой), в отличие
-    # от кита открытого минта, который набирает по чуть-чуть в течение многих блоков.
+    # team/treasury: allocation batch-minted in one block, unlike an open-mint
+    # whale that accumulates a bit at a time over many blocks.
     for f in feats.values():
         if f.mint_batch >= TEAM_BATCH_MIN:
             f.is_team = True
 
-    # ранние покупатели: первые N% по НЕ-минтовым первым приобретениям
+    # early buyers: first N% of NON-mint first acquisitions
     non_mint_first = [w for (w, m) in first_acq if not m]
     cutoff = max(1, int(len(non_mint_first) * settings.early_buyer_fraction))
     for w in non_mint_first[:cutoff]:
@@ -128,10 +127,10 @@ def tag_early(client: AlchemyClient, contract: str, settings: Settings,
 
 
 # ---------------------------------------------------------------------------
-# 2. DEGEN + PnL (в пределах коллекции)
+# 2. DEGEN + PnL (within the collection)
 # ---------------------------------------------------------------------------
 def _sale_price(sale: dict) -> float:
-    """Извлечь суммарную цену сделки из записи getNFTSales (нативный токен)."""
+    """Extract the total sale price from a getNFTSales record (native token)."""
     total = 0.0
     for key in ("sellerFee", "protocolFee", "royaltyFee"):
         fee = sale.get(key) or {}
@@ -148,10 +147,10 @@ def _sale_price(sale: dict) -> float:
 
 def tag_degen(client: AlchemyClient, contract: str, settings: Settings,
               feats: dict[str, WalletFeatures]) -> bool:
-    """Посчитать покупки/продажи и реализованный PnL по продажам коллекции.
+    """Count buys/sells and realized PnL from collection sales.
 
-    Возвращает True, если данные о продажах доступны (getNFTSales поддержан).
-    Если нет — degen считается по числу out-трансферов (флип-прокси), PnL=0.
+    Returns True if sales data is available (getNFTSales supported). Otherwise
+    degen is counted from out-transfers (flip proxy), PnL=0.
     """
     sales = client.nft_sales(contract)
     if sales:
@@ -167,14 +166,14 @@ def tag_degen(client: AlchemyClient, contract: str, settings: Settings,
                 f = feats.setdefault(seller, WalletFeatures(address=seller))
                 f.sells += 1
                 f.realized_pnl += price
-                # был ли покупателем ранее => buy-and-flip; минтером => mint-and-flip
+                # was a buyer before => buy-and-flip; a minter => mint-and-flip
                 if f.buys > 0:
                     f.buy_and_flip = True
                 if f.is_minter:
                     f.mint_and_flip = True
         return True
 
-    # fallback: out-трансферы контракта как прокси флипов
+    # fallback: contract out-transfers as a flip proxy
     for t in client.asset_transfers(contract=contract, order="asc"):
         frm = (t.get("from") or "").lower()
         if not frm or frm == ZERO_ADDRESS:
@@ -193,7 +192,7 @@ def tag_degen(client: AlchemyClient, contract: str, settings: Settings,
 # ---------------------------------------------------------------------------
 def tag_smart_money(mainnet: AlchemyClient | None, feats: dict[str, WalletFeatures],
                     only: set[str] | None = None) -> None:
-    """Для каждого кошелька посчитать blue-chip NFT и баланс на mainnet."""
+    """For each wallet, count blue-chip NFTs and the mainnet balance."""
     if mainnet is None:
         return
     bluechip_addrs = list(BLUECHIP_CONTRACTS.keys())
@@ -205,8 +204,8 @@ def tag_smart_money(mainnet: AlchemyClient | None, feats: dict[str, WalletFeatur
         except RuntimeError:
             nfts = []
         f.bluechip_count = len(nfts)
-        # withMetadata=false отдаёт плоский "contractAddress"; с метаданными —
-        # вложенный "contract.address". Поддерживаем оба.
+        # withMetadata=false returns a flat "contractAddress"; with metadata it is
+        # nested "contract.address". Support both.
         collections = {
             (n.get("contractAddress") or n.get("contract", {}).get("address") or "").lower()
             for n in nfts
@@ -224,7 +223,7 @@ def tag_smart_money(mainnet: AlchemyClient | None, feats: dict[str, WalletFeatur
 
 
 # ---------------------------------------------------------------------------
-# 4. KOL (curated список + опц. ENS)
+# 4. KOL (curated list + optional ENS)
 # ---------------------------------------------------------------------------
 def _load_address_labels(path: str) -> dict[str, str]:
     out: dict[str, str] = {}
@@ -253,35 +252,35 @@ def tag_kol(feats: dict[str, WalletFeatures], kol_path: str,
 
 
 # ---------------------------------------------------------------------------
-# 5. Скоринг
+# 5. Scoring
 # ---------------------------------------------------------------------------
 def _clamp01(x: float) -> float:
     return max(0.0, min(1.0, x))
 
 
-# Доли внутри группы "smart": blue-chip, holdings этой коллекции (conviction),
-# остаток — баланс кита (ETH). Сумма первых двух должна быть <= 1.
+# Shares within the "smart" group: blue-chip, holdings of this collection
+# (conviction), remainder is whale ETH balance. First two must sum to <= 1.
 SMART_BLUECHIP_SHARE = float(os.getenv("SMART_BLUECHIP_SHARE", "0.5"))
 SMART_HELD_SHARE = float(os.getenv("SMART_HELD_SHARE", "0.25"))
 
 
 def signals(f: WalletFeatures) -> dict[str, float]:
-    """Нормализованные сигналы 0..1 по трём группам.
+    """Normalized 0..1 signals for the three groups.
 
-    * **smart** — «умные деньги» / киты: разнообразие blue-chip коллекций (важнее
-      числа NFT), баланс ETH (кит), и **conviction** — сколько NFT самой коллекции
-      держит кошелёк (флор-байеры, поддерживающие цену). Все три — «китовые».
-    * **degen** — активность флипов в пределах коллекции.
-    * **early** — минтер (0.6) или ранний покупатель (1.0).
+    * **smart** - smart money / whales: blue-chip collection diversity (more than
+      raw NFT count), ETH balance (whale), and **conviction** - how many NFTs of
+      this collection the wallet holds (floor buyers supporting the price).
+    * **degen** - flip activity within the collection.
+    * **early** - minter (0.6) or early buyer (1.0).
 
-    Сигналы непрерывные там, где возможно, чтобы топ не «слипался».
+    Signals are continuous where possible so the top does not clump.
     """
     bluechip = (
         0.65 * _clamp01(f.bluechip_collections / BLUECHIP_COLL_CAP)
         + 0.35 * _log_ratio(f.bluechip_count, BLUECHIP_CAP)
     )
     whale = _log_ratio(f.eth_balance, BALANCE_CAP)
-    # conviction: держит МНОГО NFT этой коллекции (сверх 1-й штуки)
+    # conviction: holds MANY NFTs of this collection (above the first one)
     conviction = _log_ratio(max(f.tokens_held - 1, 0), HELD_CAP)
     whale_share = max(0.0, 1.0 - SMART_BLUECHIP_SHARE - SMART_HELD_SHARE)
     smart = (
@@ -290,7 +289,7 @@ def signals(f: WalletFeatures) -> dict[str, float]:
         + whale_share * whale
     )
     degen = _clamp01(f.num_flips / FLIP_CAP)
-    # команда/трежери не получает early-кредита за батч-минт аллокации
+    # team/treasury gets no early credit for batch-minting the allocation
     if f.is_team:
         early = 0.0
     else:
@@ -299,7 +298,7 @@ def signals(f: WalletFeatures) -> dict[str, float]:
 
 
 def score_components(f: WalletFeatures, weights: dict) -> tuple[float, dict[str, float]]:
-    """Вернуть (total_score 0..100, вклад каждой группы в баллах)."""
+    """Return (total_score 0..100, each group's point contribution)."""
     sigs = signals(f)
     active = {k: weights.get(k, 0.0) for k in sigs}
     total_w = sum(active.values()) or 1.0

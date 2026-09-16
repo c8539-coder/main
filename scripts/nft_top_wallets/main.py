@@ -1,10 +1,10 @@
-"""CLI: собрать и ранжировать топ-кошельки по NFT-коллекции.
+"""CLI: collect and rank top wallets for an NFT collection.
 
-Пример:
+Example:
     python -m scripts.nft_top_wallets.main --top 200
     python -m scripts.nft_top_wallets.main --contract 0x116e... --limit 50
 
-Секреты — только через окружение (см. .env.example).
+Secrets come only from the environment (see .env.example).
 """
 
 from __future__ import annotations
@@ -64,26 +64,26 @@ def _row(f: WalletFeatures) -> dict:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Топ-кошельки NFT-коллекции")
-    p.add_argument("--contract", help="Адрес контракта (по умолчанию из env/config)")
-    p.add_argument("--top", type=int, default=200, help="Сколько кошельков вывести")
+    p = argparse.ArgumentParser(description="Top wallets of an NFT collection")
+    p.add_argument("--contract", help="Contract address (default from env/config)")
+    p.add_argument("--top", type=int, default=200, help="How many wallets to print")
     p.add_argument(
         "--limit", type=int, default=0,
-        help="Ограничить число обогащаемых кошельков (0 = все). Для smoke-теста.",
+        help="Limit how many wallets to enrich (0 = all). For a smoke test.",
     )
     p.add_argument(
         "--no-mainnet", action="store_true",
-        help="Не ходить на eth-mainnet за blue-chip (smart-money=0)",
+        help="Skip eth-mainnet blue-chip enrichment (smart-money=0)",
     )
     p.add_argument(
         "--ens", type=int, default=100,
-        help="Резолвить ENS-имена для top-N кошельков (0 = выключить). Только отображение.",
+        help="Resolve ENS names for the top-N wallets (0 = off). Display only.",
     )
     p.add_argument(
         "--keep-team", action="store_true",
-        help="Не исключать команду/трежери (батч-минтеров) из лидерборда.",
+        help="Do not exclude team/treasury (batch-minters) from the leaderboard.",
     )
-    p.add_argument("--out", default=OUT_DIR, help="Каталог для CSV")
+    p.add_argument("--out", default=OUT_DIR, help="Output directory for the CSV")
     return p.parse_args(argv)
 
 
@@ -98,83 +98,83 @@ def run(argv: list[str] | None = None) -> int:
         else AlchemyClient(settings.mainnet, settings)
     )
 
-    print(f"[i] Сеть коллекции : {settings.chain.name}")
-    print(f"[i] Контракт       : {contract}")
-    print(f"[i] Mainnet enrich : {'off' if mainnet is None else settings.mainnet.name}")
+    print(f"[i] Collection chain : {settings.chain.name}")
+    print(f"[i] Contract         : {contract}")
+    print(f"[i] Mainnet enrich   : {'off' if mainnet is None else settings.mainnet.name}")
 
-    # 0) sanity: метаданные контракта
+    # 0) sanity: contract metadata
     try:
         meta = chain.contract_metadata(contract)
         name = meta.get("name") or meta.get("openSeaMetadata", {}).get("collectionName")
-        print(f"[i] Коллекция      : {name or '—'} "
+        print(f"[i] Collection       : {name or '-'} "
               f"(supply={meta.get('totalSupply')}, type={meta.get('tokenType')})")
     except Exception as exc:  # noqa: BLE001
-        print(f"[!] Не удалось получить метаданные контракта: {exc}", file=sys.stderr)
+        print(f"[!] Failed to fetch contract metadata: {exc}", file=sys.stderr)
 
     t0 = time.time()
 
-    # 1) холдеры
-    print("[1/5] Собираю холдеров…")
+    # 1) holders
+    print("[1/5] Collecting holders...")
     holders = chain.owners_for_contract(contract)
     feats: dict[str, WalletFeatures] = {
         addr: WalletFeatures(address=addr, tokens_held=held)
         for addr, held in holders.items()
     }
-    print(f"      холдеров: {len(feats)}")
+    print(f"      holders: {len(feats)}")
 
-    # 2) early (минтеры + ранние покупатели)
-    print("[2/5] Размечаю early (минтеры + ранние покупатели)…")
+    # 2) early (minters + early buyers)
+    print("[2/5] Tagging early (minters + early buyers)...")
     tag_early(chain, contract, settings, feats)
 
     # 3) degen + PnL
-    print("[3/5] Считаю флипы и PnL…")
+    print("[3/5] Counting flips and PnL...")
     have_sales = tag_degen(chain, contract, settings, feats)
     if not have_sales:
-        print("      (!) getNFTSales недоступен на этой сети — degen по прокси, PnL=0")
+        print("      (!) getNFTSales unavailable on this chain - degen via proxy, PnL=0")
 
-    # актуализируем tokens_held для кошельков, которые всё продали (в feats попали
-    # из early/degen, но не из holders) — оставляем 0, они уже не холдеры.
+    # wallets that sold everything ended up in feats via early/degen but not via
+    # holders; leave tokens_held=0, they are no longer holders.
 
     # 4) smart money (mainnet)
-    #    ограничиваем обогащение текущими холдерами и, при --limit, top-N по
-    #    предварительному признаку, чтобы не жечь лимиты на всех.
+    #    restrict enrichment to current holders and, with --limit, the first N,
+    #    to avoid burning API limits on everyone.
     holder_addrs = set(holders.keys())
     enrich_targets = holder_addrs
     if args.limit and args.limit > 0:
         enrich_targets = set(list(holder_addrs)[: args.limit])
-    print(f"[4/5] Обогащаю smart-money по {len(enrich_targets)} кошелькам…")
+    print(f"[4/5] Enriching smart-money for {len(enrich_targets)} wallets...")
     tag_smart_money(mainnet, feats, only=enrich_targets)
 
     # 5) kol
-    print("[5/5] Размечаю KOL/curated…")
+    print("[5/5] Tagging KOL/curated...")
     tag_kol(feats, KOL_LIST_PATH, SMART_MONEY_LIST_PATH)
 
-    # скоринг: три группы — smart / degen / early
+    # scoring: three groups - smart / degen / early
     for f in feats.values():
         score_wallet(f, settings.weights)
 
-    # ранжируем только текущих холдеров (те, кто реально держит коллекцию)
+    # rank only current holders (those actually holding the collection)
     ranked = sorted(
         (f for a, f in feats.items() if a in holder_addrs),
         key=lambda f: f.total_score,
         reverse=True,
     )
-    # команда/трежери исключается из лидерборда (в CSV остаётся, помечена is_team)
+    # team/treasury excluded from the leaderboard (kept in CSV, flagged is_team)
     n_team = sum(1 for f in ranked if f.is_team)
     display = ranked if args.keep_team else [f for f in ranked if not f.is_team]
 
-    # ENS-имена для верхушки (только отображение, на скор не влияют).
-    # Резолвим после ранжирования и лишь top-N, чтобы не жечь лимиты.
+    # ENS names for the top (display only, no effect on score).
+    # Resolve after ranking and only top-N to avoid burning limits.
     if mainnet is not None and args.ens > 0 and display:
         head = display[: args.ens]
-        print(f"[+] Резолвлю ENS для top-{len(head)}…")
+        print(f"[+] Resolving ENS for top-{len(head)}...")
         names = resolve_ens_many(mainnet, [f.address for f in head])
         for f in head:
             f.ens = names.get(f.address, "")
         if names:
-            print(f"      найдено имён: {len(names)}")
+            print(f"      names found: {len(names)}")
 
-    # вывод: в CSV пишем всех холдеров (команда помечена is_team), в лидерборд — display
+    # output: CSV holds all holders (team flagged is_team); leaderboard = display
     os.makedirs(args.out, exist_ok=True)
     ts = time.strftime("%Y%m%d-%H%M%S")
     csv_path = os.path.join(args.out, f"top_wallets_{contract[:10]}_{ts}.csv")
@@ -186,17 +186,17 @@ def run(argv: list[str] | None = None) -> int:
 
     _print_table(display[: args.top])
     if n_team:
-        note = "включена (--keep-team)" if args.keep_team else "исключена из лидерборда"
-        print(f"[i] команда/трежери: {n_team} кош. (батч ≥{TEAM_BATCH_MIN} минтов в одном блоке) — {note}")
-    print(f"\n[✓] Готово за {time.time() - t0:.1f}s. CSV: {csv_path}")
-    print(f"    Холдеров: {len(ranked)} | в лидерборде: {len(display)} | показано: "
+        note = "included (--keep-team)" if args.keep_team else "excluded from leaderboard"
+        print(f"[i] team/treasury: {n_team} wallets (batch >={TEAM_BATCH_MIN} mints in one block) - {note}")
+    print(f"\n[OK] Done in {time.time() - t0:.1f}s. CSV: {csv_path}")
+    print(f"    Holders: {len(ranked)} | in leaderboard: {len(display)} | shown: "
           f"{min(args.top, len(display))}")
     return 0
 
 
 def _print_table(rows: list[WalletFeatures]) -> None:
     if not rows:
-        print("Нет данных.")
+        print("No data.")
         return
     print(f"\n{'#':>3}  {'score':>6}  {'address / ens':<42}  {'held':>4}  "
           f"{'flips':>5}  {'ethβ':>8}  {'bc':>3}  labels")

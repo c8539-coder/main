@@ -1,7 +1,7 @@
-"""Тонкий клиент Alchemy NFT API v3 + Core JSON-RPC.
+"""Thin Alchemy NFT API v3 + Core JSON-RPC client.
 
-Только чтение. Ретраи с экспоненциальным бэкоффом на 429/5xx/сетевые ошибки,
-мягкий троттлинг между запросами.
+Read-only. Retries with exponential backoff on 429/5xx/network errors, with
+light throttling between requests.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ class AlchemyClient:
         self._last_call = 0.0
 
     # ------------------------------------------------------------------
-    # Низкоуровневые запросы
+    # Low-level requests
     # ------------------------------------------------------------------
     def _throttle(self) -> None:
         wait = self.s.request_delay_s - (time.monotonic() - self._last_call)
@@ -38,23 +38,23 @@ class AlchemyClient:
                 resp = self._session.request(
                     method, url, timeout=self.s.timeout_s, **kwargs
                 )
-            except requests.RequestException as exc:  # сетевые сбои
+            except requests.RequestException as exc:  # network failures
                 last_exc = exc
             else:
                 if resp.status_code == 200:
                     return resp.json()
                 if resp.status_code in (429, 500, 502, 503, 504):
                     last_exc = RuntimeError(
-                        f"{resp.status_code} от Alchemy: {resp.text[:200]}"
+                        f"{resp.status_code} from Alchemy: {resp.text[:200]}"
                     )
                 else:
-                    # 4xx (кроме 429) — не ретраим, ошибка запроса
+                    # 4xx (except 429) -> do not retry, request error
                     raise RuntimeError(
                         f"Alchemy {resp.status_code}: {resp.text[:300]}"
                     )
             sleep_s = self.s.backoff_base_s * (2 ** attempt)
             time.sleep(sleep_s)
-        raise RuntimeError(f"Alchemy не ответил после ретраев: {last_exc}")
+        raise RuntimeError(f"Alchemy did not respond after retries: {last_exc}")
 
     def _nft_get(self, endpoint: str, params: dict) -> dict:
         return self._request("GET", f"{self.net.nft_url}/{endpoint}", params=params)
@@ -76,7 +76,7 @@ class AlchemyClient:
         return data
 
     def owners_for_contract(self, contract: str) -> dict[str, int]:
-        """Все владельцы контракта -> {wallet_lower: tokens_held}."""
+        """All owners of the contract -> {wallet_lower: tokens_held}."""
         owners: dict[str, int] = {}
         page_key: str | None = None
         while True:
@@ -101,14 +101,14 @@ class AlchemyClient:
         return owners
 
     def nfts_for_owner(self, owner: str, contracts: Iterable[str] | None = None) -> list[dict]:
-        """Список NFT кошелька (опц. отфильтрованный по contracts)."""
+        """NFTs owned by a wallet (optionally filtered by contracts)."""
         out: list[dict] = []
         page_key: str | None = None
         contract_list = list(contracts) if contracts else None
         while True:
             params: dict[str, Any] = {"owner": owner, "withMetadata": "false", "pageSize": 100}
             if contract_list:
-                # Alchemy принимает contractAddresses[] повторяющимся ключом
+                # Alchemy accepts contractAddresses[] as a repeated key
                 params["contractAddresses[]"] = contract_list
             if page_key:
                 params["pageKey"] = page_key
@@ -120,7 +120,7 @@ class AlchemyClient:
         return out
 
     def nft_sales(self, contract: str, *, limit: int = 1000) -> list[dict]:
-        """Продажи по контракту (если поддержано сетью). Может вернуть []."""
+        """Sales for the contract (if the chain supports it). May return []."""
         out: list[dict] = []
         page_key: str | None = None
         try:
@@ -138,7 +138,7 @@ class AlchemyClient:
                 if not page_key or len(out) >= limit:
                     break
         except RuntimeError:
-            # Метод может быть не поддержан на новой сети — деградируем молча.
+            # The method may be unsupported on a newer chain -> degrade silently.
             return out
         return out
 
@@ -155,7 +155,7 @@ class AlchemyClient:
         order: str = "asc",
         max_pages: int = 50,
     ) -> Iterator[dict]:
-        """Итератор по alchemy_getAssetTransfers (постранично)."""
+        """Iterate alchemy_getAssetTransfers (paginated)."""
         categories = categories or ["erc721", "erc1155"]
         page_key: str | None = None
         pages = 0
@@ -184,12 +184,12 @@ class AlchemyClient:
                 break
 
     def eth_balance(self, address: str) -> float:
-        """Баланс нативного токена в ETH (float)."""
+        """Native token balance in ETH (float)."""
         hex_wei = self._rpc("eth_getBalance", [address, "latest"])
         return int(hex_wei, 16) / 1e18
 
     def eth_call(self, to: str, data: str, block: str = "latest") -> str:
-        """Низкоуровневый eth_call -> hex-строка результата ('0x' при пустом)."""
+        """Low-level eth_call -> hex result string ('0x' when empty)."""
         result = self._rpc("eth_call", [{"to": to, "data": data}, block])
         return result or "0x"
 
@@ -197,7 +197,7 @@ class AlchemyClient:
         return (transfer.get("from") or "").lower() == ZERO_ADDRESS
 
     def block_number(self) -> int:
-        """Текущий номер блока."""
+        """Current block number."""
         return int(self._rpc("eth_blockNumber", []), 16)
 
     def mints_since(
@@ -207,10 +207,10 @@ class AlchemyClient:
         to_block: str = "latest",
         max_pages: int = 40,
     ) -> Iterator[dict]:
-        """Все минты (трансферы from 0x0) начиная с блока ``from_block``.
+        """All mints (transfers from 0x0) starting at block ``from_block``.
 
-        Отдаёт трансферы alchemy_getAssetTransfers с ``fromAddress = 0x0``,
-        постранично. У каждого трансфера есть ``to``, ``rawContract.address``,
+        Yields alchemy_getAssetTransfers transfers with ``fromAddress = 0x0``,
+        paginated. Each transfer has ``to``, ``rawContract.address`` and
         ``blockNum`` (hex).
         """
         page_key: str | None = None

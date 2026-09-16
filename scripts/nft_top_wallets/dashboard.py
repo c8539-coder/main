@@ -1,13 +1,13 @@
-"""Собрать HTML-дашборд из CSV, который выдаёт main.py.
+"""Build an HTML dashboard from the CSV that main.py produces.
 
-Читает ранжированный CSV (top_wallets_*.csv), считает сводку и раскладку скора
-на компоненты, подставляет данные в ``templates/dashboard.html`` и пишет
-самодостаточный HTML в каталог out/.
+Reads a ranked CSV (top_wallets_*.csv), computes the summary and the score
+component breakdown, injects the data into ``templates/dashboard.html`` and
+writes a self-contained HTML into out/.
 
-Пример:
-    # взять свежайший CSV из out/ автоматически
+Example:
+    # pick the newest CSV in out/ automatically
     python -m scripts.nft_top_wallets.dashboard
-    # или явно
+    # or explicitly
     python -m scripts.nft_top_wallets.dashboard --csv path/to/top_wallets.csv --top 50
 """
 
@@ -29,7 +29,7 @@ OUT_DIR = os.path.join(HERE, "out")
 TEMPLATE = os.path.join(HERE, "templates", "dashboard.html")
 PLACEHOLDER = "/*__DATA__*/{}"
 
-# те же дефолты весов, что и в config.Settings (env-переопределяемые): три группы
+# same weight defaults as config.Settings (env-overridable): three groups
 _WEIGHT_DEFAULTS = {"smart": "0.50", "degen": "0.25", "early": "0.25"}
 
 
@@ -56,7 +56,7 @@ def build_payload(csv_path: str, *, top: int = 50, collection: str = "",
                   enrich_chain: str = "eth-mainnet") -> dict:
     rows = list(csv.DictReader(open(csv_path, encoding="utf-8")))
     if not rows:
-        raise SystemExit(f"Пустой CSV: {csv_path}")
+        raise SystemExit(f"Empty CSV: {csv_path}")
 
     have_sales = any(_f(r.get("realized_pnl", 0)) != 0 for r in rows)
     weights = _weights()
@@ -64,7 +64,7 @@ def build_payload(csv_path: str, *, top: int = 50, collection: str = "",
     data = []
     n_team = 0
     for r in rows:
-        # команда/трежери исключается из лидерборда (в CSV помечена is_team)
+        # team/treasury excluded from the leaderboard (flagged is_team in CSV)
         if _i(r.get("is_team", 0)):
             n_team += 1
             continue
@@ -115,7 +115,7 @@ def build_payload(csv_path: str, *, top: int = 50, collection: str = "",
 def render(payload: dict, out_path: str) -> str:
     tmpl = open(TEMPLATE, encoding="utf-8").read()
     if PLACEHOLDER not in tmpl:
-        raise SystemExit(f"В шаблоне нет плейсхолдера {PLACEHOLDER!r}: {TEMPLATE}")
+        raise SystemExit(f"Template has no placeholder {PLACEHOLDER!r}: {TEMPLATE}")
     title = f"{payload['meta']['collection']} Holder Intel"
     body = (
         tmpl.replace(PLACEHOLDER, json.dumps(payload, ensure_ascii=False, separators=(",", ":")), 1)
@@ -132,9 +132,9 @@ def _latest_csv() -> str | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="HTML-дашборд топ-кошельков из CSV")
-    p.add_argument("--csv", help="Путь к CSV (по умолчанию — свежайший в out/)")
-    p.add_argument("--top", type=int, default=50, help="Сколько кошельков показать")
+    p = argparse.ArgumentParser(description="HTML dashboard of top wallets from a CSV")
+    p.add_argument("--csv", help="CSV path (default: newest in out/)")
+    p.add_argument("--top", type=int, default=50, help="How many wallets to show")
     p.add_argument("--collection", default="Rare Friends Genesis")
     p.add_argument("--contract", default=os.getenv("COLLECTION_CONTRACT", ""))
     p.add_argument("--chain", default=os.getenv("ALCHEMY_NETWORK", "robinhood-mainnet"))
@@ -144,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
 
     csv_path = args.csv or _latest_csv()
     if not csv_path or not os.path.exists(csv_path):
-        raise SystemExit("Не найден CSV. Сначала запустите main.py или укажите --csv.")
+        raise SystemExit("No CSV found. Run main.py first or pass --csv.")
 
     payload = build_payload(
         csv_path, top=args.top, collection=args.collection,
@@ -152,9 +152,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     out = render(payload, args.out)
     s = payload["summary"]
-    print(f"[✓] Дашборд: {out}")
-    print(f"    холдеров {s['holders']} | top-score {s['score_max']} | "
-          f"blue-chip {s['bluechip_holders']} | ENS {s['ens_found']} | из CSV: {csv_path}")
+    print(f"[OK] Dashboard: {out}")
+    print(f"    holders {s['holders']} | top-score {s['score_max']} | "
+          f"blue-chip {s['bluechip_holders']} | ENS {s['ens_found']} | from CSV: {csv_path}")
     return 0
 
 

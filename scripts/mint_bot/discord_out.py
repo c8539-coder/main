@@ -1,7 +1,7 @@
-"""Отправка алерта о минте в Discord через webhook канала.
+"""Post a mint alert to Discord via a channel webhook.
 
-Webhook проще бота: не нужен токен/intents, только URL вебхука канала
-(Настройки канала -> Integrations -> Webhooks -> New Webhook -> Copy URL).
+A webhook is simpler than a bot: no token/intents, just the channel webhook URL
+(Channel Settings -> Integrations -> Webhooks -> New Webhook -> Copy URL).
 """
 
 from __future__ import annotations
@@ -10,14 +10,14 @@ from collections import Counter
 
 import requests
 
-# Цвета типов (в стиле дашборда)
+# Type colors (matching the dashboard)
 TYPE_COLOR = {"SMART": 0x3987E5, "DEGEN": 0xD95926, "EARLY": 0x199E70}
 DEFAULT_COLOR = 0xE6AD55
 
-# Красивое отображение типов (без капса)
+# Display labels for types (not shouted in caps)
 TYPE_LABEL = {"SMART": "Smart", "DEGEN": "Degen", "EARLY": "Early"}
 
-# Слаг сети для OpenSea
+# OpenSea chain slug
 OPENSEA_SLUG = {"eth-mainnet": "ethereum", "robinhood-mainnet": "robinhood"}
 
 
@@ -31,7 +31,7 @@ def opensea_url(chain: str, contract: str) -> str:
 
 
 def explorer_url(chain: str, contract: str) -> str | None:
-    """Ссылка на блок-эксплорер по адресу контракта."""
+    """Block-explorer link for the contract address."""
     if chain.startswith("eth"):
         return f"https://etherscan.io/address/{contract}"
     if chain.startswith("robinhood"):
@@ -41,9 +41,9 @@ def explorer_url(chain: str, contract: str) -> str | None:
 
 def build_embed(*, name: str, chain: str, contract: str,
                 wallets: dict[str, str], hot: bool = False) -> dict:
-    """Собрать Discord-embed под алерт «N кошельков минтят коллекцию».
+    """Build the Discord embed for an "N wallets minting a collection" alert.
 
-    ``hot=True`` (крупный сигнал, с пингом роли) помечает алерт огоньком.
+    ``hot=True`` (large signal, with a role ping) marks the alert with a flame.
     """
     by_type = Counter(wallets.values())
     n = len(wallets)
@@ -51,16 +51,16 @@ def build_embed(*, name: str, chain: str, contract: str,
     dominant = by_type.most_common(1)[0][0] if by_type else "TRACKED"
     os_url = opensea_url(chain, contract)
     exp = explorer_url(chain, contract)
-    # до 10 адресов в тело
+    # up to 10 addresses in the body
     sample = " · ".join(
         f"`{a[:6]}…{a[-4:]}` {_pretty(t)}" for a, t in list(wallets.items())[:10]
     )
-    more = f" · … и ещё {n - 10}" if n > 10 else ""
+    more = f" · … +{n - 10} more" if n > 10 else ""
     icon = "🔥" if hot else "🌱"
-    # ссылки внизу рядом
+    # links together at the bottom
     links = f"🔗 [View Collection]({os_url})" + (f" · 🔎 [Explorer]({exp})" if exp else "")
     return {
-        # заголовок embed — жирная первая строка с названием коллекции
+        # embed title = bold first line with the collection name
         "title": f"{icon} {n} Wallet Minting {name}",
         "url": os_url,
         "description": f"{breakdown}\n\n{sample}{more}\n\n{links}",
@@ -71,7 +71,7 @@ def build_embed(*, name: str, chain: str, contract: str,
 
 def post_alert(webhook_url: str, embed: dict, *, role_id: str | None = None,
                timeout: float = 15.0) -> bool:
-    """Отправить embed в канал. При ``role_id`` пингует роль. True при успехе."""
+    """Send the embed to the channel. Pings the role when ``role_id`` is set."""
     content = f"<@&{role_id}>" if role_id else ""
     payload = {
         "content": content,

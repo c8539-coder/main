@@ -1,3 +1,3 @@
-"""Сбор и ранжирование топ-кошельков по NFT-коллекции (Alchemy API)."""
+"""Collect and rank top wallets for an NFT collection (Alchemy API)."""
 
 __all__ = ["config", "alchemy", "enrich", "main"]

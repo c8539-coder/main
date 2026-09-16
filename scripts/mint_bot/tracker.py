@@ -1,7 +1,7 @@
-"""Ядро минт-трекера: опрос минтов, отбор по watchlist, агрегация по контракту.
+"""Mint-tracker core: poll mints, filter by the watchlist, aggregate per contract.
 
-Состояние сериализуемо в JSON, чтобы переживать перезапуск (последний
-обработанный блок на сеть + накопленные по контрактам кошельки).
+State is JSON-serializable so it survives restarts (last processed block per
+chain + wallets accumulated per contract).
 """
 
 from __future__ import annotations
@@ -18,18 +18,18 @@ class Alert:
     contract: str
     name: str
     wallets: dict[str, str]  # address -> type
-    ping: bool = False       # пинговать ли роль (крупный сигнal)
+    ping: bool = False       # whether to ping the role (large signal)
 
 
 @dataclass
 class MintTracker:
     watchlist: dict[str, str]                 # address_lower -> TYPE
     clients: dict[str, AlchemyClient]         # chain name -> client
-    min_wallets: int = 5                      # порог для тихого алерта (без пинга)
-    ping_wallets: int = 15                    # порог, с которого пингуем роль
-    ping_step: int = 15                       # повторный пинг каждые +N кошельков (0 = только раз)
-    window_seconds: int = 6 * 3600            # окно, в котором копим минты по контракту
-    backfill_blocks: int = 300                # сколько блоков назад смотреть на первом старте
+    min_wallets: int = 5                      # threshold for the quiet alert (no ping)
+    ping_wallets: int = 15                    # threshold at which the role is pinged
+    ping_step: int = 15                       # re-ping every +N wallets (0 = ping once)
+    window_seconds: int = 6 * 3600            # window over which mints per contract accrue
+    backfill_blocks: int = 300                # how many blocks back to scan on first start
     state: dict = field(default_factory=lambda: {"last_block": {}, "contracts": {}})
 
     # ------------------------------------------------------------------
@@ -69,17 +69,17 @@ class MintTracker:
         self.state["last_block"][chain] = current
 
     def _collect_alerts(self) -> list[Alert]:
-        """Тихий алерт при >= min_wallets, отдельный алерт с пингом при >= ping_wallets.
+        """Quiet alert at >= min_wallets, a separate ping alert at >= ping_wallets.
 
-        Контракт может дать до двух алертов: тихий (набрал 5) и, если дорос до 15,
-        второй с пингом роли.
+        A contract can yield up to two alerts: the quiet one (reached 5) and, if
+        it grows to 15, a second one that pings the role.
         """
         alerts: list[Alert] = []
         for key, entry in self.state["contracts"].items():
             n = len(entry["wallets"])
             last_ping = entry.get("pinged_at", 0)
             hit_base = n >= self.min_wallets and not entry.get("alerted")
-            # первый пинг при ping_wallets; повторный — когда прибавилось ping_step
+            # first ping at ping_wallets; re-ping once it grew by ping_step
             if last_ping == 0:
                 hit_ping = n >= self.ping_wallets
             else:
@@ -106,7 +106,7 @@ class MintTracker:
 
     # ------------------------------------------------------------------
     def poll(self) -> list[Alert]:
-        """Один цикл: опросить все сети, вернуть новые алерты (>= порога)."""
+        """One cycle: poll all chains, return new alerts (>= threshold)."""
         now = time.time()
         for chain in self.clients:
             self._poll_chain(chain, now)

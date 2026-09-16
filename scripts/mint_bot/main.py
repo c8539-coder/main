@@ -1,10 +1,10 @@
-"""Минт-трекер: следит за минтами наших кошельков и шлёт алерт в Discord.
+"""Mint tracker: watch mints by tracked wallets and alert a Discord channel.
 
-Когда >= MINT_ALERT_MIN отслеживаемых кошельков заминтили одну коллекцию,
-постит алерт в канал (через webhook) с разбивкой по типам и пингом роли.
+When >= MINT_ALERT_MIN tracked wallets mint the same collection, post an alert
+to the channel (via webhook) with a per-type breakdown and an optional role ping.
 
-Запуск:  python -m scripts.mint_bot.main
-Секреты и настройки — через окружение (см. .env.example).
+Run:  python -m scripts.mint_bot.main
+Config comes from the environment (see .env.example).
 """
 
 from __future__ import annotations
@@ -59,10 +59,10 @@ def _build_clients(settings: Settings, chains_wanted: list[str]) -> dict[str, Al
     for name in chains_wanted:
         net = available.get(name)
         if net is None:
-            log.warning("Сеть %s не сконфигурирована (нет endpoint), пропускаю", name)
+            log.warning("chain %s is not configured (no endpoint), skipping", name)
             continue
         clients[name] = AlchemyClient(net, settings)
-    if not clients:  # если явный список не совпал — берём всё, что есть
+    if not clients:  # explicit list matched nothing -> use whatever is available
         clients = {n: AlchemyClient(net, settings) for n, net in available.items()}
     return clients
 
@@ -74,7 +74,7 @@ def run() -> None:
     )
     webhook = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
     if not webhook:
-        raise SystemExit("Не задан DISCORD_WEBHOOK_URL (URL вебхука канала).")
+        raise SystemExit("DISCORD_WEBHOOK_URL is not set (channel webhook URL).")
     role_id = os.getenv("DISCORD_ROLE_ID", "").strip() or None
     min_wallets = int(os.getenv("MINT_ALERT_MIN", "5"))
     ping_wallets = int(os.getenv("MINT_PING_MIN", "15"))
@@ -91,16 +91,16 @@ def run() -> None:
 
     watchlist = load_watchlist(watch_paths, min_score=min_score)
     if not watchlist:
-        raise SystemExit(f"Пустой watchlist. Проверьте WATCHLIST_FILES={watch_paths}")
+        raise SystemExit(f"Empty watchlist. Check WATCHLIST_FILES={watch_paths}")
 
-    # тестовый режим: отправить один пример-алерт в канал и выйти
+    # test mode: post one sample alert to the channel and exit
     if "--test" in sys.argv or os.getenv("MINT_TEST"):
         sample = dict(list(watchlist.items())[:6]) or {"0x0000000000000000000000000000000000000000": "SMART"}
         embed = build_embed(name="TEST — Bored Ape Yacht Club", chain="eth-mainnet",
                             contract="0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d",
                             wallets=sample, hot=bool(role_id))
         post_alert(webhook, embed, role_id=role_id)
-        log.info("Тестовый алерт отправлен в канал (%d кош.).", len(sample))
+        log.info("Test alert sent to the channel (%d wallets).", len(sample))
         return
 
     settings = Settings.load()
@@ -112,7 +112,7 @@ def run() -> None:
         state=_load_state(state_file),
     )
 
-    log.info("Старт: %d кошельков, сети=%s, алерт>=%d, пинг>=%d, опрос каждые %ds",
+    log.info("Started: %d wallets, chains=%s, alert>=%d, ping>=%d, poll every %ds",
              len(watchlist), list(clients), min_wallets, ping_wallets, poll_s)
 
     while True:
@@ -122,16 +122,16 @@ def run() -> None:
                 embed = build_embed(name=a.name, chain=a.chain,
                                     contract=a.contract, wallets=a.wallets, hot=a.ping)
                 try:
-                    # пинг роли только на крупном сигнале (a.ping)
+                    # ping the role only on a large signal (a.ping)
                     post_alert(webhook, embed, role_id=(role_id if a.ping else None))
-                    log.info("Алерт%s: %d кош. минтят %s (%s)",
+                    log.info("Alert%s: %d wallets minting %s (%s)",
                              " (PING)" if a.ping else "", len(a.wallets), a.name, a.chain)
                 except Exception as exc:  # noqa: BLE001
-                    log.error("Не отправить алерт в Discord: %s", exc)
+                    log.error("Failed to send alert to Discord: %s", exc)
                     tracker.state["contracts"][f"{a.chain}|{a.contract}"]["alerted"] = False
             _save_state(state_file, tracker.state)
         except Exception as exc:  # noqa: BLE001
-            log.error("Ошибка в цикле опроса: %s", exc)
+            log.error("Poll loop error: %s", exc)
         time.sleep(poll_s)
 
 
