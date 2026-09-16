@@ -195,3 +195,43 @@ class AlchemyClient:
 
     def is_mint(self, transfer: dict) -> bool:
         return (transfer.get("from") or "").lower() == ZERO_ADDRESS
+
+    def block_number(self) -> int:
+        """Текущий номер блока."""
+        return int(self._rpc("eth_blockNumber", []), 16)
+
+    def mints_since(
+        self,
+        from_block: int,
+        *,
+        to_block: str = "latest",
+        max_pages: int = 40,
+    ) -> Iterator[dict]:
+        """Все минты (трансферы from 0x0) начиная с блока ``from_block``.
+
+        Отдаёт трансферы alchemy_getAssetTransfers с ``fromAddress = 0x0``,
+        постранично. У каждого трансфера есть ``to``, ``rawContract.address``,
+        ``blockNum`` (hex).
+        """
+        page_key: str | None = None
+        pages = 0
+        while pages < max_pages:
+            params: dict[str, Any] = {
+                "category": ["erc721", "erc1155"],
+                "order": "asc",
+                "withMetadata": True,
+                "excludeZeroValue": False,
+                "maxCount": "0x3e8",  # 1000
+                "fromAddress": ZERO_ADDRESS,
+                "fromBlock": hex(from_block),
+                "toBlock": to_block,
+            }
+            if page_key:
+                params["pageKey"] = page_key
+            result = self._rpc("alchemy_getAssetTransfers", [params])
+            for t in result.get("transfers", []):
+                yield t
+            page_key = result.get("pageKey")
+            pages += 1
+            if not page_key:
+                break
