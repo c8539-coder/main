@@ -14,12 +14,26 @@ import requests
 TYPE_COLOR = {"SMART": 0x3987E5, "DEGEN": 0xD95926, "EARLY": 0x199E70}
 DEFAULT_COLOR = 0xE6AD55
 
+# Красивое отображение типов (без капса)
+TYPE_LABEL = {"SMART": "Smart", "DEGEN": "Degen", "EARLY": "Early"}
 
-def _explorer(chain: str, contract: str) -> str:
+# Слаг сети для OpenSea
+OPENSEA_SLUG = {"eth-mainnet": "ethereum", "robinhood-mainnet": "robinhood"}
+
+
+def _pretty(t: str) -> str:
+    return TYPE_LABEL.get(t.upper(), t.title())
+
+
+def opensea_url(chain: str, contract: str) -> str:
+    slug = OPENSEA_SLUG.get(chain, chain)
+    return f"https://opensea.io/assets/{slug}/{contract}"
+
+
+def explorer_url(chain: str, contract: str) -> str | None:
     if chain.startswith("eth"):
         return f"https://etherscan.io/address/{contract}"
-    # robinhood-mainnet и прочие сети Alchemy — ссылки может не быть, даём OpenSea
-    return f"https://opensea.io/assets/{chain}/{contract}"
+    return None
 
 
 def build_embed(*, name: str, chain: str, contract: str,
@@ -30,18 +44,22 @@ def build_embed(*, name: str, chain: str, contract: str,
     """
     by_type = Counter(wallets.values())
     n = len(wallets)
-    breakdown = " · ".join(f"{t} {c}" for t, c in by_type.most_common())
+    breakdown = " · ".join(f"{_pretty(t)} {c}" for t, c in by_type.most_common())
     dominant = by_type.most_common(1)[0][0] if by_type else "TRACKED"
+    # ссылки
+    os_url = opensea_url(chain, contract)
+    exp = explorer_url(chain, contract)
+    links = f"[OpenSea]({os_url})" + (f" · [Explorer]({exp})" if exp else "")
     # до 10 адресов в тело
-    sample = "\n".join(
-        f"`{a[:6]}…{a[-4:]}` {t}" for a, t in list(wallets.items())[:10]
+    sample = " · ".join(
+        f"`{a[:6]}…{a[-4:]}` {_pretty(t)}" for a, t in list(wallets.items())[:10]
     )
-    more = f"\n… и ещё {n - 10}" if n > 10 else ""
+    more = f" · … и ещё {n - 10}" if n > 10 else ""
     icon = "🔥" if hot else "🌱"
     return {
         "title": f"{icon} {n} Wallet Minting {name}",
-        "description": f"**{breakdown}**\n\n{sample}{more}",
-        "url": _explorer(chain, contract),
+        "description": f"**{breakdown}**\n{links}\n\n{sample}{more}",
+        "url": os_url,
         "color": TYPE_COLOR.get(dominant, DEFAULT_COLOR),
         "fields": [
             {"name": "Chain", "value": chain, "inline": True},
