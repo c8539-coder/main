@@ -41,7 +41,7 @@ def build_embed(*, name: str, chain: str, contract: str,
     breakdown = " · ".join(f"{_pretty(t)} {c}" for t, c in by_type.most_common())
     dominant = by_type.most_common(1)[0][0] if by_type else "TRACKED"
     os_url = opensea_url(chain, contract)
-    link = f"[View Collection]({os_url})"
+    link = f"🔗 [View Collection]({os_url})"
     # до 10 адресов в тело
     sample = " · ".join(
         f"`{a[:6]}…{a[-4:]}` {_pretty(t)}" for a, t in list(wallets.items())[:10]
@@ -50,7 +50,7 @@ def build_embed(*, name: str, chain: str, contract: str,
     icon = "🔥" if hot else "🌱"
     return {
         "title": f"{icon} {n} Wallet Minting {name}",
-        "description": f"**{breakdown}**\n{link}\n\n{sample}{more}",
+        "description": f"{breakdown}\n{link}\n\n{sample}{more}",
         "url": os_url,
         "color": TYPE_COLOR.get(dominant, DEFAULT_COLOR),
         "footer": {"text": "Wallet mint tracker"},
