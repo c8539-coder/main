@@ -30,12 +30,6 @@ def opensea_url(chain: str, contract: str) -> str:
     return f"https://opensea.io/assets/{slug}/{contract}"
 
 
-def explorer_url(chain: str, contract: str) -> str | None:
-    if chain.startswith("eth"):
-        return f"https://etherscan.io/address/{contract}"
-    return None
-
-
 def build_embed(*, name: str, chain: str, contract: str,
                 wallets: dict[str, str], hot: bool = False) -> dict:
     """Собрать Discord-embed под алерт «N кошельков минтят коллекцию».
@@ -46,10 +40,8 @@ def build_embed(*, name: str, chain: str, contract: str,
     n = len(wallets)
     breakdown = " · ".join(f"{_pretty(t)} {c}" for t, c in by_type.most_common())
     dominant = by_type.most_common(1)[0][0] if by_type else "TRACKED"
-    # ссылки
     os_url = opensea_url(chain, contract)
-    exp = explorer_url(chain, contract)
-    links = f"[OpenSea]({os_url})" + (f" · [Explorer]({exp})" if exp else "")
+    link = f"[View Collection]({os_url})"
     # до 10 адресов в тело
     sample = " · ".join(
         f"`{a[:6]}…{a[-4:]}` {_pretty(t)}" for a, t in list(wallets.items())[:10]
@@ -58,13 +50,9 @@ def build_embed(*, name: str, chain: str, contract: str,
     icon = "🔥" if hot else "🌱"
     return {
         "title": f"{icon} {n} Wallet Minting {name}",
-        "description": f"**{breakdown}**\n{links}\n\n{sample}{more}",
+        "description": f"**{breakdown}**\n{link}\n\n{sample}{more}",
         "url": os_url,
         "color": TYPE_COLOR.get(dominant, DEFAULT_COLOR),
-        "fields": [
-            {"name": "Chain", "value": chain, "inline": True},
-            {"name": "Contract", "value": f"`{contract}`", "inline": False},
-        ],
         "footer": {"text": "Wallet mint tracker"},
     }
 
