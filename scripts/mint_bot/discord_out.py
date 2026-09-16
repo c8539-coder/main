@@ -31,9 +31,11 @@ def opensea_url(chain: str, contract: str) -> str:
 
 
 def explorer_url(chain: str, contract: str) -> str | None:
-    """Ссылка на блок-эксплорер. Для robinhood публичного эксплорера нет -> None."""
+    """Ссылка на блок-эксплорер по адресу контракта."""
     if chain.startswith("eth"):
         return f"https://etherscan.io/address/{contract}"
+    if chain.startswith("robinhood"):
+        return f"https://robin.etherscan.io/address/{contract}"
     return None
 
 
@@ -49,18 +51,19 @@ def build_embed(*, name: str, chain: str, contract: str,
     dominant = by_type.most_common(1)[0][0] if by_type else "TRACKED"
     os_url = opensea_url(chain, contract)
     exp = explorer_url(chain, contract)
-    links = f"🔗 [View Collection]({os_url})" + (f" · [Explorer]({exp})" if exp else "")
     # до 10 адресов в тело
     sample = " · ".join(
         f"`{a[:6]}…{a[-4:]}` {_pretty(t)}" for a, t in list(wallets.items())[:10]
     )
     more = f" · … и ещё {n - 10}" if n > 10 else ""
     icon = "🔥" if hot else "🌱"
-    # название коллекции — обычной строкой (не жирный заголовок embed), ссылки внизу
-    header = f"{icon} {n} Wallet Minting {name}"
-    description = f"{header}\n{breakdown}\n\n{sample}{more}\n\n{links}"
+    # название коллекции — обычной строкой; View Collection сразу под ней; Explorer внизу
+    top = f"{icon} {n} Wallet Minting {name}\n{breakdown}\n🔗 [View Collection]({os_url})"
+    parts = [top, f"{sample}{more}"]
+    if exp:
+        parts.append(f"🔎 [Explorer]({exp})")
     return {
-        "description": description,
+        "description": "\n\n".join(parts),
         "url": os_url,
         "color": TYPE_COLOR.get(dominant, DEFAULT_COLOR),
         "footer": {"text": "Wallet mint tracker"},
