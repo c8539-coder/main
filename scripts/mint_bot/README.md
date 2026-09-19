@@ -17,10 +17,13 @@ Smart 3 · Degen 3
 - **Mints** — every `MINT_POLL_SECONDS` it polls `alchemy_getAssetTransfers`
   (mints = transfers `from 0x0`) for new blocks on each chain, and keeps only
   mints to watchlist addresses.
-- **Buys** — with an `OPENSEA_API_KEY` set, buys come from the **OpenSea Stream
-  API** (websocket): strictly OpenSea sales, in real time, with the exact price
-  and payment token (ETH vs WETH). Without a key it falls back to on-chain
-  Seaport-confirmed sales (`SALES_ONLY`), which also catches Blur/X2Y2.
+- **Buys** — secondary buys are found on-chain (transfers to watchlist wallets),
+  then confirmed via the **OpenSea REST API**: for each wallet that just bought,
+  one call to OpenSea's account-sales endpoint confirms the sale happened on
+  OpenSea and returns the exact price + payment token (ETH vs WETH). Only a few
+  calls per cycle (one per buying wallet). Without an `OPENSEA_API_KEY` it falls
+  back to on-chain Seaport-confirmed sales (`SALES_ONLY`), which also catches
+  Blur/X2Y2.
 - It counts how many **distinct** tracked wallets hit the same collection within
   `MINT_WINDOW_SECONDS`. At `MINT_ALERT_MIN` wallets → a quiet alert (no ping).
   At `MINT_PING_MIN` → a second alert **with a role ping** (🔥), then again every
@@ -58,7 +61,7 @@ Defaults to `scripts/nft_top_wallets/out/good_wallets.csv` (columns `address`,
 |---|---|---|
 | `DISCORD_WEBHOOK_URL` | — | channel webhook URL (required) |
 | `DISCORD_ROLE_ID` | — | role to ping, or `everyone`/`here` (optional) |
-| `OPENSEA_API_KEY` | — | OpenSea Stream for strict real-time buys (recommended) |
+| `OPENSEA_API_KEY` | — | confirm buys are OpenSea-only via REST (recommended) |
 | `MINT_ALERT_MIN` | 5 | quiet-alert threshold (no ping) |
 | `MINT_PING_MIN` | 15 | wallet count that triggers a role ping |
 | `MINT_PING_STEP` | 15 | re-ping every this many extra wallets |
@@ -74,8 +77,6 @@ Defaults to `scripts/nft_top_wallets/out/good_wallets.csv` (columns `address`,
 
 - The `OPENSEA_API_KEY` is a secret — keep it in `.env` (gitignored), never
   commit it.
-- With OpenSea enabled, the on-chain poll only handles mints; buys arrive over
-  the websocket, so `MINT_POLL_SECONDS` no longer gates buy latency.
 - Collection name for a buy comes from the OpenSea event; for a mint it comes
   from `getContractMetadata` (cached per contract).
 - Links: **View Collection** (OpenSea) and an **Explorer** link (Etherscan for

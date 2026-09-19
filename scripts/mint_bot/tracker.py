@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from scripts.nft_top_wallets.alchemy import AlchemyClient
 from scripts.nft_top_wallets.config import ZERO_ADDRESS
 
+from .opensea_api import OpenSeaAPI
+
 # Seaport (OpenSea's protocol) OrderFulfilled event topic — marks a real sale.
 SEAPORT_ORDER_FULFILLED = (
     "0x9d9af8e38d66c62e2c12f0225249fd9d721c54b83f48d9352c97c6cacdcb6f31"
@@ -46,8 +48,9 @@ class MintTracker:
     ping_step: int = 15
     window_seconds: int = 6 * 3600
     backfill_blocks: int = 300
-    track_buys: bool = True                    # on-chain buy fallback (ignored if OpenSea stream feeds buys)
+    track_buys: bool = True                    # also alert on secondary buys, not only mints
     sales_only: bool = True                    # on-chain buy = confirmed Seaport sale only
+    opensea: OpenSeaAPI | None = None          # if set, buys are confirmed OpenSea-only via REST
     state: dict = field(default_factory=lambda: {"last_block": {}, "contracts": {}})
     _weth: dict = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -113,15 +116,6 @@ class MintTracker:
         if currency:
             entry.setdefault("cur", {})[wallet] = currency
 
-    def add_buy(self, chain: str, contract: str, wallet: str,
-                currency: str | None = None, name: str | None = None) -> None:
-        """Register an OpenSea buy (called from the stream thread)."""
-        w = wallet.lower()
-        if w not in self.watchlist:
-            return
-        with self._lock:
-            self._add(f"{chain}|buy|{contract.lower()}", w, currency, time.time(), name)
-
     def _poll_chain(self, chain: str, now: float) -> None:
         client = self.clients[chain]
         current = client.block_number()
@@ -134,7 +128,9 @@ class MintTracker:
             return
 
         sale_cache: dict = {}
-        events: list[tuple[str, str, str | None]] = []  # (key, wallet, currency)
+        events: list[tuple[str, str, str | None, str | None]] = []  # (key, wallet, currency, name)
+        # candidate buys, resolved after the scan: (wallet, contract, tx)
+        buy_candidates: list[tuple[str, str, str]] = []
         # network work outside the lock
         for t in client.transfers_since(start + 1, to_block=hex(current),
                                         mints_only=not self.track_buys):
@@ -142,20 +138,51 @@ class MintTracker:
             if to not in self.watchlist:
                 continue
             frm = (t.get("from") or "").lower()
-            kind = "mint" if frm == ZERO_ADDRESS else "buy"
-            currency = None
-            if kind == "buy" and self.sales_only:
-                currency = self._sale_currency(client, t.get("hash"), sale_cache)
-                if currency is None:
-                    continue
             contract = ((t.get("rawContract") or {}).get("address") or "").lower()
             if not contract:
                 continue
-            events.append((f"{chain}|{kind}|{contract}", to, currency))
+            if frm == ZERO_ADDRESS:
+                events.append((f"{chain}|mint|{contract}", to, None, None))
+            elif self.track_buys:
+                buy_candidates.append((to, contract, t.get("hash") or ""))
+
+        events += self._resolve_buys(chain, client, buy_candidates, now, sale_cache)
+
         with self._lock:
-            for key, wallet, currency in events:
-                self._add(key, wallet, currency, now)
+            for key, wallet, currency, name in events:
+                self._add(key, wallet, currency, now, name)
             self.state["last_block"][chain] = current
+
+    def _resolve_buys(self, chain, client, candidates, now, sale_cache):
+        """Turn candidate secondary transfers into confirmed buy events.
+
+        With an OpenSea key: one REST call per buying wallet confirms the sale
+        happened on OpenSea (and gives ETH/WETH + collection name). Otherwise
+        fall back to on-chain Seaport confirmation.
+        """
+        out = []
+        if self.opensea is not None:
+            since = now - self.window_seconds
+            os_cache: dict[str, dict] = {}
+            for wallet, contract, _tx in candidates:
+                buys = os_cache.get(wallet)
+                if buys is None:
+                    buys = self.opensea.buys_by_contract(chain, wallet, since=since)
+                    os_cache[wallet] = buys
+                info = buys.get(contract)
+                if info:  # OpenSea confirmed this wallet bought this collection
+                    out.append((f"{chain}|buy|{contract}", wallet, info["currency"],
+                                info.get("name") or None))
+            return out
+        # fallback: on-chain Seaport sale confirmation
+        for wallet, contract, tx in candidates:
+            currency = None
+            if self.sales_only:
+                currency = self._sale_currency(client, tx, sale_cache)
+                if currency is None:
+                    continue
+            out.append((f"{chain}|buy|{contract}", wallet, currency, None))
+        return out
 
     def _collect_alerts(self) -> list[Alert]:
         alerts: list[Alert] = []
