@@ -86,6 +86,23 @@ def build_embed(*, name: str, chain: str, contract: str,
     }
 
 
+def clean_webhook_url(url: str) -> str:
+    """Normalize a Discord webhook URL from common copy/paste mistakes.
+
+    Fixes: surrounding quotes/spaces, a trailing slash, a trailing ``/messages``
+    (that path rejects POST -> 405), and a missing https scheme.
+    """
+    u = (url or "").strip().strip('"').strip("'").strip()
+    if u.startswith("http://"):
+        u = "https://" + u[len("http://"):]
+    elif u and not u.startswith("https://"):
+        u = "https://" + u
+    u = u.rstrip("/")
+    if u.endswith("/messages"):
+        u = u[: -len("/messages")]
+    return u
+
+
 def post_alert(webhook_url: str, embed: dict, *, role_id: str | None = None,
                timeout: float = 15.0) -> bool:
     """Send the embed to the channel. ``role_id`` pings a role, or "everyone"/
@@ -101,6 +118,12 @@ def post_alert(webhook_url: str, embed: dict, *, role_id: str | None = None,
         else:
             content, allowed = f"<@&{role_id}>", {"parse": ["roles"]}
     payload = {"content": content, "embeds": [embed], "allowed_mentions": allowed}
-    resp = requests.post(webhook_url, json=payload, timeout=timeout)
-    resp.raise_for_status()
+    url = clean_webhook_url(webhook_url)
+    resp = requests.post(url, json=payload, timeout=timeout, allow_redirects=False)
+    if resp.status_code >= 300:
+        # surface Discord's own explanation (e.g. wrong URL shape) in the error
+        raise RuntimeError(
+            f"Discord webhook {resp.status_code}: {resp.text[:200]} "
+            f"(url tail: …{url[-24:]})"
+        )
     return True
