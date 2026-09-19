@@ -25,7 +25,10 @@ from websocket import WebSocketApp
 
 log = logging.getLogger("mint_bot.opensea")
 
-STREAM_URL = "wss://stream.openseabeta.com/socket/websocket?token={key}"
+# vsn=1.0.0 forces the Phoenix "map" serializer: each message is a JSON object
+# ({topic,event,payload,ref}). Without it the server may use the v2 serializer,
+# which sends arrays ([join_ref,ref,topic,event,payload]) instead.
+STREAM_URL = "wss://stream.openseabeta.com/socket/websocket?token={key}&vsn=1.0.0"
 WILDCARD_TOPIC = "collection:*"
 
 # OpenSea chain slug -> our internal chain name (for links / naming).
@@ -117,7 +120,12 @@ class OpenSeaStream:
             msg = json.loads(message)
         except json.JSONDecodeError:
             return
-        if msg.get("event") != "item_sold":
+        # Phoenix v2 serializer sends arrays; we request v1 (objects) but guard.
+        if isinstance(msg, list):
+            event = msg[3] if len(msg) >= 5 else None
+            payload = msg[4] if len(msg) >= 5 else {}
+            msg = {"event": event, "payload": payload}
+        if not isinstance(msg, dict) or msg.get("event") != "item_sold":
             return
         payload = msg.get("payload", {}).get("payload", {}) or msg.get("payload", {})
         try:
