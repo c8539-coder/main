@@ -25,6 +25,7 @@ from scripts.nft_top_wallets.alchemy import AlchemyClient
 from scripts.nft_top_wallets.config import Settings
 
 from .discord_out import build_embed, post_alert
+from .opensea_stream import OpenSeaStream
 from .tracker import MintTracker
 from .watchlist import load_watchlist
 
@@ -81,6 +82,7 @@ def run() -> None:
     ping_step = int(os.getenv("MINT_PING_STEP", "15"))
     track_buys = os.getenv("TRACK_BUYS", "1") not in ("0", "false", "False", "")
     sales_only = os.getenv("SALES_ONLY", "1") not in ("0", "false", "False", "")
+    opensea_key = os.getenv("OPENSEA_API_KEY", "").strip()
     poll_s = max(15, int(os.getenv("MINT_POLL_SECONDS", "60")))
     window_s = int(os.getenv("MINT_WINDOW_SECONDS", str(6 * 3600)))
     backfill = int(os.getenv("MINT_BACKFILL_BLOCKS", "300"))
@@ -107,16 +109,31 @@ def run() -> None:
 
     settings = Settings.load()
     clients = _build_clients(settings, chains)
+    # With an OpenSea key, buys come from the OpenSea Stream (strict OpenSea
+    # sales); the on-chain poll then only needs to catch mints.
+    use_opensea = bool(opensea_key) and track_buys
     tracker = MintTracker(
         watchlist=watchlist, clients=clients, min_wallets=min_wallets,
-        ping_wallets=ping_wallets, ping_step=ping_step, track_buys=track_buys,
+        ping_wallets=ping_wallets, ping_step=ping_step,
+        track_buys=track_buys and not use_opensea,
         sales_only=sales_only, window_seconds=window_s, backfill_blocks=backfill,
         state=_load_state(state_file),
     )
 
-    log.info("Started: %d wallets, chains=%s, mints%s, alert>=%d, ping>=%d, poll every %ds",
-             len(watchlist), list(clients), "+buys" if track_buys else "",
-             min_wallets, ping_wallets, poll_s)
+    stream: OpenSeaStream | None = None
+    if use_opensea:
+        def _on_sale(sale: dict) -> None:
+            tracker.add_buy(sale["chain"], sale["contract"], sale["buyer"],
+                            currency=sale["currency"], name=sale["collection"] or None)
+        stream = OpenSeaStream(opensea_key, _on_sale, chains=chains)
+        stream.start()
+
+    if track_buys:
+        buy_src = "OpenSea stream" if use_opensea else "on-chain sales"
+    else:
+        buy_src = "off"
+    log.info("Started: %d wallets, chains=%s, mints on-chain, buys=%s, alert>=%d, ping>=%d, poll every %ds",
+             len(watchlist), list(clients), buy_src, min_wallets, ping_wallets, poll_s)
 
     while True:
         try:

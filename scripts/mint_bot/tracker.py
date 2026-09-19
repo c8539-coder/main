@@ -1,12 +1,16 @@
-"""Tracker core: poll NFT transfers, keep watchlist wallets, aggregate per
-contract and event kind (mint or buy/sweep).
+"""Tracker core: aggregate mint (on-chain) and buy (OpenSea) events per
+collection and alert when enough watchlist wallets hit the same collection.
 
-State is JSON-serializable so it survives restarts (last processed block per
-chain + wallets accumulated per contract/kind).
+Mints come from the on-chain transfer feed (transfers from 0x0). Buys come
+either from the OpenSea Stream (strict OpenSea sales, via add_buy) or, as a
+fallback, from confirmed on-chain Seaport sales. State is JSON-serializable so
+it survives restarts. add_buy is called from the stream thread, so state
+mutations are guarded by a lock.
 """
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 
@@ -17,7 +21,6 @@ from scripts.nft_top_wallets.config import ZERO_ADDRESS
 SEAPORT_ORDER_FULFILLED = (
     "0x9d9af8e38d66c62e2c12f0225249fd9d721c54b83f48d9352c97c6cacdcb6f31"
 )
-# ERC20 Transfer(address,address,uint256) topic — payment token leg of a sale.
 ERC20_TRANSFER = (
     "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 )
@@ -30,28 +33,32 @@ class Alert:
     name: str
     kind: str                     # "mint" or "buy"
     wallets: dict[str, str]       # address -> type
-    ping: bool = False            # whether to ping the role (large signal)
-    currencies: dict[str, str] = field(default_factory=dict)  # address -> "ETH"/"WETH" (buys)
+    ping: bool = False
+    currencies: dict[str, str] = field(default_factory=dict)  # address -> "ETH"/"WETH"
 
 
 @dataclass
 class MintTracker:
     watchlist: dict[str, str]                 # address_lower -> TYPE
     clients: dict[str, AlchemyClient]         # chain name -> client
-    min_wallets: int = 5                      # threshold for the quiet alert (no ping)
-    ping_wallets: int = 15                    # threshold at which the role is pinged
-    ping_step: int = 15                       # re-ping every +N wallets (0 = ping once)
-    window_seconds: int = 6 * 3600            # window over which events per contract accrue
-    backfill_blocks: int = 300                # how many blocks back to scan on first start
-    track_buys: bool = True                   # also alert on buys/sweeps, not just mints
-    sales_only: bool = True                   # a buy counts only if it's a confirmed Seaport sale
+    min_wallets: int = 5
+    ping_wallets: int = 15
+    ping_step: int = 15
+    window_seconds: int = 6 * 3600
+    backfill_blocks: int = 300
+    track_buys: bool = True                    # on-chain buy fallback (ignored if OpenSea stream feeds buys)
+    sales_only: bool = True                    # on-chain buy = confirmed Seaport sale only
     state: dict = field(default_factory=lambda: {"last_block": {}, "contracts": {}})
-    _weth: dict = field(default_factory=dict)  # token address -> is WETH (cached)
+    _weth: dict = field(default_factory=dict)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
 
     # ------------------------------------------------------------------
     def _contract_name(self, chain: str, contract: str) -> str:
+        client = self.clients.get(chain)
+        if client is None:
+            return contract[:10]
         try:
-            m = self.clients[chain].contract_metadata(contract)
+            m = client.contract_metadata(contract)
             return (m.get("name")
                     or m.get("openSeaMetadata", {}).get("collectionName")
                     or contract[:10])
@@ -59,7 +66,6 @@ class MintTracker:
             return contract[:10]
 
     def _token_is_weth(self, client: AlchemyClient, addr: str) -> bool:
-        """Is this ERC20 the chain's WETH? Cached by symbol lookup."""
         if addr in self._weth:
             return self._weth[addr]
         is_weth = False
@@ -71,38 +77,50 @@ class MintTracker:
         self._weth[addr] = is_weth
         return is_weth
 
-    def _sale_currency(self, client: AlchemyClient, tx_hash: str | None,
-                       cache: dict[str, str | None]) -> str | None:
-        """Return the sale currency for a tx: 'ETH', 'WETH', or None if not a sale.
-
-        A sale = a Seaport OrderFulfilled event. If the tx also has an ERC20
-        transfer in WETH, the payment was WETH (an accepted offer); otherwise the
-        buyer paid native ETH (a sweep/direct buy).
-        """
+    def _sale_currency(self, client, tx_hash, cache):
+        """'ETH'/'WETH' if the tx is a Seaport sale, else None (on-chain fallback)."""
         if not tx_hash:
             return None
         if tx_hash in cache:
             return cache[tx_hash]
-        result: str | None = None
+        result = None
         try:
             r = client.tx_receipt(tx_hash)
             logs = r.get("logs", []) if r else []
-            is_sale = any((lg.get("topics") or [""])[0].lower() == SEAPORT_ORDER_FULFILLED
-                          for lg in logs)
-            if is_sale:
-                weth = False
-                for lg in logs:
-                    tp = lg.get("topics") or []
-                    # ERC20 transfer = Transfer topic with exactly 3 topics (value in data)
-                    if len(tp) == 3 and tp[0].lower() == ERC20_TRANSFER:
-                        if self._token_is_weth(client, (lg.get("address") or "").lower()):
-                            weth = True
-                            break
+            if any((lg.get("topics") or [""])[0].lower() == SEAPORT_ORDER_FULFILLED for lg in logs):
+                weth = any(
+                    len(lg.get("topics") or []) == 3
+                    and (lg["topics"][0].lower() == ERC20_TRANSFER)
+                    and self._token_is_weth(client, (lg.get("address") or "").lower())
+                    for lg in logs
+                )
                 result = "WETH" if weth else "ETH"
         except Exception:  # noqa: BLE001
             result = None
         cache[tx_hash] = result
         return result
+
+    # ------------------------------------------------------------------
+    def _add(self, key: str, wallet: str, currency: str | None, now: float,
+             name: str | None = None) -> None:
+        """Add one event to state (caller holds the lock)."""
+        entry = self.state["contracts"].setdefault(
+            key, {"wallets": {}, "first": now, "alerted": False, "name": name, "cur": {}}
+        )
+        if name and not entry.get("name"):
+            entry["name"] = name
+        entry["wallets"][wallet] = self.watchlist[wallet]
+        if currency:
+            entry.setdefault("cur", {})[wallet] = currency
+
+    def add_buy(self, chain: str, contract: str, wallet: str,
+                currency: str | None = None, name: str | None = None) -> None:
+        """Register an OpenSea buy (called from the stream thread)."""
+        w = wallet.lower()
+        if w not in self.watchlist:
+            return
+        with self._lock:
+            self._add(f"{chain}|buy|{contract.lower()}", w, currency, time.time(), name)
 
     def _poll_chain(self, chain: str, now: float) -> None:
         client = self.clients[chain]
@@ -111,12 +129,13 @@ class MintTracker:
         if start is None:
             start = max(1, current - self.backfill_blocks)
         if current <= start:
-            self.state["last_block"][chain] = current
+            with self._lock:
+                self.state["last_block"][chain] = current
             return
 
-        contracts = self.state["contracts"]
-        sale_cache: dict[str, str | None] = {}  # tx hash -> "ETH"/"WETH"/None (per poll)
-        # mints_only when we don't care about buys -> lighter feed
+        sale_cache: dict = {}
+        events: list[tuple[str, str, str | None]] = []  # (key, wallet, currency)
+        # network work outside the lock
         for t in client.transfers_since(start + 1, to_block=hex(current),
                                         mints_only=not self.track_buys):
             to = (t.get("to") or "").lower()
@@ -126,29 +145,19 @@ class MintTracker:
             kind = "mint" if frm == ZERO_ADDRESS else "buy"
             currency = None
             if kind == "buy" and self.sales_only:
-                # a buy counts only if the tx is a real marketplace sale (Seaport)
                 currency = self._sale_currency(client, t.get("hash"), sale_cache)
                 if currency is None:
                     continue
-            rc = t.get("rawContract") or {}
-            contract = (rc.get("address") or "").lower()
+            contract = ((t.get("rawContract") or {}).get("address") or "").lower()
             if not contract:
                 continue
-            key = f"{chain}|{kind}|{contract}"
-            entry = contracts.setdefault(
-                key, {"wallets": {}, "first": now, "alerted": False, "name": None, "cur": {}}
-            )
-            entry["wallets"][to] = self.watchlist[to]
-            if currency:
-                entry.setdefault("cur", {})[to] = currency
-        self.state["last_block"][chain] = current
+            events.append((f"{chain}|{kind}|{contract}", to, currency))
+        with self._lock:
+            for key, wallet, currency in events:
+                self._add(key, wallet, currency, now)
+            self.state["last_block"][chain] = current
 
     def _collect_alerts(self) -> list[Alert]:
-        """Quiet alert at >= min_wallets, a separate ping alert at >= ping_wallets.
-
-        Each contract+kind can yield up to two alerts: the quiet one (reached the
-        base threshold) and, once it grows to the ping threshold, one that pings.
-        """
         alerts: list[Alert] = []
         for key, entry in self.state["contracts"].items():
             n = len(entry["wallets"])
@@ -178,12 +187,12 @@ class MintTracker:
                     if now - e.get("first", now) > self.window_seconds]:
             del contracts[key]
 
-    # ------------------------------------------------------------------
     def poll(self) -> list[Alert]:
-        """One cycle: poll all chains, return new alerts (>= threshold)."""
+        """One cycle: poll chains for mints, return new alerts (mint + buy)."""
         now = time.time()
         for chain in self.clients:
             self._poll_chain(chain, now)
-        alerts = self._collect_alerts()
-        self._prune(now)
+        with self._lock:
+            alerts = self._collect_alerts()
+            self._prune(now)
         return alerts
