@@ -73,13 +73,19 @@ def build_embed(*, name: str, chain: str, contract: str,
 
 def post_alert(webhook_url: str, embed: dict, *, role_id: str | None = None,
                timeout: float = 15.0) -> bool:
-    """Send the embed to the channel. Pings the role when ``role_id`` is set."""
-    content = f"<@&{role_id}>" if role_id else ""
-    payload = {
-        "content": content,
-        "embeds": [embed],
-        "allowed_mentions": {"parse": ["roles"]} if role_id else {"parse": []},
-    }
+    """Send the embed to the channel. ``role_id`` pings a role, or "everyone"/
+    "here" pings @everyone/@here."""
+    content = ""
+    allowed: dict = {"parse": []}
+    if role_id:
+        rid = role_id.strip().lstrip("@").lower()
+        if rid == "everyone":
+            content, allowed = "@everyone", {"parse": ["everyone"]}
+        elif rid == "here":
+            content, allowed = "@here", {"parse": ["everyone"]}
+        else:
+            content, allowed = f"<@&{role_id}>", {"parse": ["roles"]}
+    payload = {"content": content, "embeds": [embed], "allowed_mentions": allowed}
     resp = requests.post(webhook_url, json=payload, timeout=timeout)
     resp.raise_for_status()
     return True
