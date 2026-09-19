@@ -13,6 +13,11 @@ from dataclasses import dataclass, field
 from scripts.nft_top_wallets.alchemy import AlchemyClient
 from scripts.nft_top_wallets.config import ZERO_ADDRESS
 
+# Seaport (OpenSea's protocol) OrderFulfilled event topic — marks a real sale.
+SEAPORT_ORDER_FULFILLED = (
+    "0x9d9af8e38d66c62e2c12f0225249fd9d721c54b83f48d9352c97c6cacdcb6f31"
+)
+
 
 @dataclass
 class Alert:
@@ -34,6 +39,7 @@ class MintTracker:
     window_seconds: int = 6 * 3600            # window over which events per contract accrue
     backfill_blocks: int = 300                # how many blocks back to scan on first start
     track_buys: bool = True                   # also alert on buys/sweeps, not just mints
+    sales_only: bool = True                   # a buy counts only if it's a confirmed Seaport sale
     state: dict = field(default_factory=lambda: {"last_block": {}, "contracts": {}})
 
     # ------------------------------------------------------------------
@@ -46,6 +52,26 @@ class MintTracker:
         except Exception:  # noqa: BLE001
             return contract[:10]
 
+    def _is_sale(self, client: AlchemyClient, tx_hash: str | None,
+                 cache: dict[str, bool]) -> bool:
+        """True if the tx contains a Seaport OrderFulfilled event (a real sale)."""
+        if not tx_hash:
+            return False
+        if tx_hash in cache:
+            return cache[tx_hash]
+        ok = False
+        try:
+            r = client.tx_receipt(tx_hash)
+            for lg in (r.get("logs", []) if r else []):
+                topics = lg.get("topics") or []
+                if topics and topics[0].lower() == SEAPORT_ORDER_FULFILLED:
+                    ok = True
+                    break
+        except Exception:  # noqa: BLE001
+            ok = False
+        cache[tx_hash] = ok
+        return ok
+
     def _poll_chain(self, chain: str, now: float) -> None:
         client = self.clients[chain]
         current = client.block_number()
@@ -57,6 +83,7 @@ class MintTracker:
             return
 
         contracts = self.state["contracts"]
+        sale_cache: dict[str, bool] = {}  # tx hash -> is a Seaport sale (per poll)
         # mints_only when we don't care about buys -> lighter feed
         for t in client.transfers_since(start + 1, to_block=hex(current),
                                         mints_only=not self.track_buys):
@@ -65,6 +92,10 @@ class MintTracker:
                 continue
             frm = (t.get("from") or "").lower()
             kind = "mint" if frm == ZERO_ADDRESS else "buy"
+            # a buy counts only if the tx is a real marketplace sale (Seaport)
+            if kind == "buy" and self.sales_only and not self._is_sale(
+                    client, t.get("hash"), sale_cache):
+                continue
             rc = t.get("rawContract") or {}
             contract = (rc.get("address") or "").lower()
             if not contract:

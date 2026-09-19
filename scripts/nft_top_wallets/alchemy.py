@@ -200,6 +200,10 @@ class AlchemyClient:
         """Current block number."""
         return int(self._rpc("eth_blockNumber", []), 16)
 
+    def tx_receipt(self, tx_hash: str) -> dict | None:
+        """Transaction receipt (has logs). None if not found."""
+        return self._rpc("eth_getTransactionReceipt", [tx_hash])
+
     def transfers_since(
         self,
         from_block: int,
