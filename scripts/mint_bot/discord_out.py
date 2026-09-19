@@ -40,21 +40,36 @@ def explorer_url(chain: str, contract: str) -> str | None:
 
 
 def build_embed(*, name: str, chain: str, contract: str,
-                wallets: dict[str, str], hot: bool = False, kind: str = "mint") -> dict:
+                wallets: dict[str, str], hot: bool = False, kind: str = "mint",
+                currencies: dict[str, str] | None = None) -> dict:
     """Build the Discord embed for an "N wallets minting/buying a collection" alert.
 
-    ``kind`` is "mint" or "buy". ``hot=True`` (large signal, with a role ping)
-    marks the alert with a flame.
+    ``kind`` is "mint" or "buy". ``currencies`` maps address -> "ETH"/"WETH" for
+    buys. ``hot=True`` (large signal, with a role ping) marks it with a flame.
     """
+    currencies = currencies or {}
     by_type = Counter(wallets.values())
     n = len(wallets)
     breakdown = " · ".join(f"{_pretty(t)} {c}" for t, c in by_type.most_common())
     dominant = by_type.most_common(1)[0][0] if by_type else "TRACKED"
     os_url = opensea_url(chain, contract)
     exp = explorer_url(chain, contract)
-    # up to 10 addresses in the body
+    # payment split for buys: ETH (sweep) vs WETH (accepted offer)
+    pay = ""
+    if kind == "buy" and currencies:
+        cc = Counter(currencies.values())
+        parts = []
+        if cc.get("ETH"):
+            parts.append(f"{cc['ETH']} Ξ")
+        if cc.get("WETH"):
+            parts.append(f"{cc['WETH']} WETH")
+        if parts:
+            pay = "\n💰 " + " · ".join(parts)
+    # up to 10 addresses in the body; mark WETH buyers with (W)
+    def _mark(a: str) -> str:
+        return " (W)" if currencies.get(a) == "WETH" else ""
     sample = " · ".join(
-        f"`{a[:6]}…{a[-4:]}` {_pretty(t)}" for a, t in list(wallets.items())[:10]
+        f"`{a[:6]}…{a[-4:]}` {_pretty(t)}{_mark(a)}" for a, t in list(wallets.items())[:10]
     )
     more = f" · … +{n - 10} more" if n > 10 else ""
     verb = "Minting" if kind == "mint" else "Buying"
@@ -65,7 +80,7 @@ def build_embed(*, name: str, chain: str, contract: str,
         # embed title = bold first line with the collection name
         "title": f"{icon} {n} Wallet {verb} {name}",
         "url": os_url,
-        "description": f"{breakdown}\n\n{sample}{more}\n\n{links}",
+        "description": f"{breakdown}{pay}\n\n{sample}{more}\n\n{links}",
         "color": TYPE_COLOR.get(dominant, DEFAULT_COLOR),
         "footer": {"text": "Wallet tracker"},
     }

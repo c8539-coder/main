@@ -17,6 +17,10 @@ from scripts.nft_top_wallets.config import ZERO_ADDRESS
 SEAPORT_ORDER_FULFILLED = (
     "0x9d9af8e38d66c62e2c12f0225249fd9d721c54b83f48d9352c97c6cacdcb6f31"
 )
+# ERC20 Transfer(address,address,uint256) topic — payment token leg of a sale.
+ERC20_TRANSFER = (
+    "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+)
 
 
 @dataclass
@@ -24,9 +28,10 @@ class Alert:
     chain: str
     contract: str
     name: str
-    kind: str                # "mint" or "buy"
-    wallets: dict[str, str]  # address -> type
-    ping: bool = False       # whether to ping the role (large signal)
+    kind: str                     # "mint" or "buy"
+    wallets: dict[str, str]       # address -> type
+    ping: bool = False            # whether to ping the role (large signal)
+    currencies: dict[str, str] = field(default_factory=dict)  # address -> "ETH"/"WETH" (buys)
 
 
 @dataclass
@@ -41,6 +46,7 @@ class MintTracker:
     track_buys: bool = True                   # also alert on buys/sweeps, not just mints
     sales_only: bool = True                   # a buy counts only if it's a confirmed Seaport sale
     state: dict = field(default_factory=lambda: {"last_block": {}, "contracts": {}})
+    _weth: dict = field(default_factory=dict)  # token address -> is WETH (cached)
 
     # ------------------------------------------------------------------
     def _contract_name(self, chain: str, contract: str) -> str:
@@ -52,25 +58,51 @@ class MintTracker:
         except Exception:  # noqa: BLE001
             return contract[:10]
 
-    def _is_sale(self, client: AlchemyClient, tx_hash: str | None,
-                 cache: dict[str, bool]) -> bool:
-        """True if the tx contains a Seaport OrderFulfilled event (a real sale)."""
+    def _token_is_weth(self, client: AlchemyClient, addr: str) -> bool:
+        """Is this ERC20 the chain's WETH? Cached by symbol lookup."""
+        if addr in self._weth:
+            return self._weth[addr]
+        is_weth = False
+        try:
+            m = client._rpc("alchemy_getTokenMetadata", [addr])
+            is_weth = (m or {}).get("symbol", "").upper() == "WETH"
+        except Exception:  # noqa: BLE001
+            is_weth = False
+        self._weth[addr] = is_weth
+        return is_weth
+
+    def _sale_currency(self, client: AlchemyClient, tx_hash: str | None,
+                       cache: dict[str, str | None]) -> str | None:
+        """Return the sale currency for a tx: 'ETH', 'WETH', or None if not a sale.
+
+        A sale = a Seaport OrderFulfilled event. If the tx also has an ERC20
+        transfer in WETH, the payment was WETH (an accepted offer); otherwise the
+        buyer paid native ETH (a sweep/direct buy).
+        """
         if not tx_hash:
-            return False
+            return None
         if tx_hash in cache:
             return cache[tx_hash]
-        ok = False
+        result: str | None = None
         try:
             r = client.tx_receipt(tx_hash)
-            for lg in (r.get("logs", []) if r else []):
-                topics = lg.get("topics") or []
-                if topics and topics[0].lower() == SEAPORT_ORDER_FULFILLED:
-                    ok = True
-                    break
+            logs = r.get("logs", []) if r else []
+            is_sale = any((lg.get("topics") or [""])[0].lower() == SEAPORT_ORDER_FULFILLED
+                          for lg in logs)
+            if is_sale:
+                weth = False
+                for lg in logs:
+                    tp = lg.get("topics") or []
+                    # ERC20 transfer = Transfer topic with exactly 3 topics (value in data)
+                    if len(tp) == 3 and tp[0].lower() == ERC20_TRANSFER:
+                        if self._token_is_weth(client, (lg.get("address") or "").lower()):
+                            weth = True
+                            break
+                result = "WETH" if weth else "ETH"
         except Exception:  # noqa: BLE001
-            ok = False
-        cache[tx_hash] = ok
-        return ok
+            result = None
+        cache[tx_hash] = result
+        return result
 
     def _poll_chain(self, chain: str, now: float) -> None:
         client = self.clients[chain]
@@ -83,7 +115,7 @@ class MintTracker:
             return
 
         contracts = self.state["contracts"]
-        sale_cache: dict[str, bool] = {}  # tx hash -> is a Seaport sale (per poll)
+        sale_cache: dict[str, str | None] = {}  # tx hash -> "ETH"/"WETH"/None (per poll)
         # mints_only when we don't care about buys -> lighter feed
         for t in client.transfers_since(start + 1, to_block=hex(current),
                                         mints_only=not self.track_buys):
@@ -92,19 +124,23 @@ class MintTracker:
                 continue
             frm = (t.get("from") or "").lower()
             kind = "mint" if frm == ZERO_ADDRESS else "buy"
-            # a buy counts only if the tx is a real marketplace sale (Seaport)
-            if kind == "buy" and self.sales_only and not self._is_sale(
-                    client, t.get("hash"), sale_cache):
-                continue
+            currency = None
+            if kind == "buy" and self.sales_only:
+                # a buy counts only if the tx is a real marketplace sale (Seaport)
+                currency = self._sale_currency(client, t.get("hash"), sale_cache)
+                if currency is None:
+                    continue
             rc = t.get("rawContract") or {}
             contract = (rc.get("address") or "").lower()
             if not contract:
                 continue
             key = f"{chain}|{kind}|{contract}"
             entry = contracts.setdefault(
-                key, {"wallets": {}, "first": now, "alerted": False, "name": None}
+                key, {"wallets": {}, "first": now, "alerted": False, "name": None, "cur": {}}
             )
             entry["wallets"][to] = self.watchlist[to]
+            if currency:
+                entry.setdefault("cur", {})[to] = currency
         self.state["last_block"][chain] = current
 
     def _collect_alerts(self) -> list[Alert]:
@@ -132,7 +168,8 @@ class MintTracker:
                 entry["pinged"] = True
                 entry["pinged_at"] = n
             alerts.append(Alert(chain, contract, entry["name"], kind,
-                                dict(entry["wallets"]), ping=hit_ping))
+                                dict(entry["wallets"]), ping=hit_ping,
+                                currencies=dict(entry.get("cur", {}))))
         return alerts
 
     def _prune(self, now: float) -> None:
