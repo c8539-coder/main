@@ -10,6 +10,12 @@ Protocol: OpenSea uses Phoenix Channels over websocket. We join the wildcard
 topic ``collection:*`` and read ``item_sold`` messages. A heartbeat keeps the
 socket open; the reader reconnects with backoff on any drop.
 
+``collection:*`` is a firehose (every event type for every collection), so the
+socket-read callback must stay cheap: it drops non-sale messages with a string
+check and hands the rest to a worker thread for JSON parsing. If parsing ran on
+the read thread, the backlog would stall websocket pings and the server would
+drop the connection.
+
 Docs: https://docs.opensea.io/reference/stream-api-overview
 """
 
@@ -17,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
 import threading
 import time
 from typing import Callable
@@ -26,7 +33,7 @@ from websocket import WebSocketApp
 log = logging.getLogger("mint_bot.opensea")
 
 # OpenSea's Phoenix gateway uses the v2 serializer: incoming messages are JSON
-# arrays ([join_ref, ref, topic, event, payload]). _on_message handles that.
+# arrays ([join_ref, ref, topic, event, payload]). _handle handles that.
 # (Do not pin vsn=1.0.0 — the server rejects it with a 400 handshake.)
 STREAM_URL = "wss://stream.openseabeta.com/socket/websocket?token={key}"
 WILDCARD_TOPIC = "collection:*"
@@ -71,9 +78,15 @@ class OpenSeaStream:
         self._ws: WebSocketApp | None = None
         self._hb: threading.Thread | None = None
         self._ref = 0
+        # raw item_sold messages, parsed off the socket-read thread
+        self._q: queue.Queue[str] = queue.Queue(maxsize=20000)
+        self._worker: threading.Thread | None = None
 
     # ------------------------------------------------------------------
     def start(self) -> None:
+        self._worker = threading.Thread(target=self._consume, name="opensea-worker",
+                                        daemon=True)
+        self._worker.start()
         self._thread = threading.Thread(target=self._run, name="opensea-stream",
                                         daemon=True)
         self._thread.start()
@@ -102,7 +115,7 @@ class OpenSeaStream:
 
         def _heartbeat() -> None:
             while not self._stop.is_set():
-                time.sleep(30)
+                time.sleep(15)
                 try:
                     ws.send(json.dumps({
                         "topic": "phoenix", "event": "heartbeat",
@@ -116,11 +129,30 @@ class OpenSeaStream:
         self._hb.start()
 
     def _on_message(self, ws: WebSocketApp, message: str) -> None:
-        try:
-            msg = json.loads(message)
-        except json.JSONDecodeError:
+        # Keep this cheap: collection:* is a firehose. Skip anything that is not
+        # a sale with a plain substring check before touching the JSON parser,
+        # and never block the read thread — queue the rest for the worker.
+        if "item_sold" not in message:
             return
-        # Phoenix v2 serializer sends arrays; we request v1 (objects) but guard.
+        try:
+            self._q.put_nowait(message)
+        except queue.Full:
+            pass  # drop under extreme load rather than stall the socket
+
+    def _consume(self) -> None:
+        while not self._stop.is_set():
+            try:
+                message = self._q.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            try:
+                self._handle(message)
+            except Exception as exc:  # noqa: BLE001
+                log.debug("Could not handle sale: %s", exc)
+
+    def _handle(self, message: str) -> None:
+        msg = json.loads(message)
+        # Phoenix v2 serializer sends arrays; guard for both forms.
         if isinstance(msg, list):
             event = msg[3] if len(msg) >= 5 else None
             payload = msg[4] if len(msg) >= 5 else {}
@@ -128,11 +160,7 @@ class OpenSeaStream:
         if not isinstance(msg, dict) or msg.get("event") != "item_sold":
             return
         payload = msg.get("payload", {}).get("payload", {}) or msg.get("payload", {})
-        try:
-            sale = self._parse_sale(payload)
-        except Exception as exc:  # noqa: BLE001
-            log.debug("Could not parse sale: %s", exc)
-            return
+        sale = self._parse_sale(payload)
         if sale is None:
             return
         if self.chains and sale["chain"] not in self.chains:
@@ -182,7 +210,8 @@ class OpenSeaStream:
                 on_close=self._on_close,
             )
             try:
-                self._ws.run_forever(ping_interval=20, ping_timeout=10)
+                # generous ping timeout: a brief processing hiccup must not drop us
+                self._ws.run_forever(ping_interval=25, ping_timeout=20)
             except Exception as exc:  # noqa: BLE001
                 log.warning("OpenSea stream crashed: %s", exc)
             if self._stop.is_set():
