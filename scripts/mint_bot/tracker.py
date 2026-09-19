@@ -37,6 +37,7 @@ class Alert:
     wallets: dict[str, str]       # address -> type
     ping: bool = False
     currencies: dict[str, str] = field(default_factory=dict)  # address -> "ETH"/"WETH"
+    prices: dict[str, float] = field(default_factory=dict)     # address -> price in ETH
 
 
 @dataclass
@@ -105,16 +106,19 @@ class MintTracker:
 
     # ------------------------------------------------------------------
     def _add(self, key: str, wallet: str, currency: str | None, now: float,
-             name: str | None = None) -> None:
+             name: str | None = None, price: float | None = None) -> None:
         """Add one event to state (caller holds the lock)."""
         entry = self.state["contracts"].setdefault(
-            key, {"wallets": {}, "first": now, "alerted": False, "name": name, "cur": {}}
+            key, {"wallets": {}, "first": now, "alerted": False, "name": name,
+                  "cur": {}, "prices": {}}
         )
         if name and not entry.get("name"):
             entry["name"] = name
         entry["wallets"][wallet] = self.watchlist[wallet]
         if currency:
             entry.setdefault("cur", {})[wallet] = currency
+        if price:
+            entry.setdefault("prices", {})[wallet] = price
 
     def _poll_chain(self, chain: str, now: float) -> None:
         client = self.clients[chain]
@@ -128,7 +132,8 @@ class MintTracker:
             return
 
         sale_cache: dict = {}
-        events: list[tuple[str, str, str | None, str | None]] = []  # (key, wallet, currency, name)
+        # (key, wallet, currency, name, price)
+        events: list[tuple[str, str, str | None, str | None, float | None]] = []
         # candidate buys, resolved after the scan: (wallet, contract, tx)
         buy_candidates: list[tuple[str, str, str]] = []
         # network work outside the lock
@@ -142,15 +147,15 @@ class MintTracker:
             if not contract:
                 continue
             if frm == ZERO_ADDRESS:
-                events.append((f"{chain}|mint|{contract}", to, None, None))
+                events.append((f"{chain}|mint|{contract}", to, None, None, None))
             elif self.track_buys:
                 buy_candidates.append((to, contract, t.get("hash") or ""))
 
         events += self._resolve_buys(chain, client, buy_candidates, now, sale_cache)
 
         with self._lock:
-            for key, wallet, currency, name in events:
-                self._add(key, wallet, currency, now, name)
+            for key, wallet, currency, name, price in events:
+                self._add(key, wallet, currency, now, name, price)
             self.state["last_block"][chain] = current
 
     def _resolve_buys(self, chain, client, candidates, now, sale_cache):
@@ -172,16 +177,16 @@ class MintTracker:
                 info = buys.get(contract)
                 if info:  # OpenSea confirmed this wallet bought this collection
                     out.append((f"{chain}|buy|{contract}", wallet, info["currency"],
-                                info.get("name") or None))
+                                info.get("name") or None, info.get("price")))
             return out
-        # fallback: on-chain Seaport sale confirmation
+        # fallback: on-chain Seaport sale confirmation (no price available)
         for wallet, contract, tx in candidates:
             currency = None
             if self.sales_only:
                 currency = self._sale_currency(client, tx, sale_cache)
                 if currency is None:
                     continue
-            out.append((f"{chain}|buy|{contract}", wallet, currency, None))
+            out.append((f"{chain}|buy|{contract}", wallet, currency, None, None))
         return out
 
     def _collect_alerts(self) -> list[Alert]:
@@ -205,7 +210,8 @@ class MintTracker:
                 entry["pinged_at"] = n
             alerts.append(Alert(chain, contract, entry["name"], kind,
                                 dict(entry["wallets"]), ping=hit_ping,
-                                currencies=dict(entry.get("cur", {}))))
+                                currencies=dict(entry.get("cur", {})),
+                                prices=dict(entry.get("prices", {}))))
         return alerts
 
     def _prune(self, now: float) -> None:

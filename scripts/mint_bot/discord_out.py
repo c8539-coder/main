@@ -39,32 +39,41 @@ def explorer_url(chain: str, contract: str) -> str | None:
     return None
 
 
+def _fmt_price(x: float) -> str:
+    """Compact ETH amount: 0.002, 1.5, 0.00012 — no trailing zeros."""
+    s = format(float(x), ".4g")
+    if "e" in s or "E" in s:  # avoid scientific notation for tiny values
+        s = f"{float(x):.6f}".rstrip("0").rstrip(".")
+    return s
+
+
 def build_embed(*, name: str, chain: str, contract: str,
                 wallets: dict[str, str], hot: bool = False, kind: str = "mint",
-                currencies: dict[str, str] | None = None) -> dict:
+                currencies: dict[str, str] | None = None,
+                prices: dict[str, float] | None = None) -> dict:
     """Build the Discord embed for an "N wallets minting/buying a collection" alert.
 
-    ``kind`` is "mint" or "buy". ``currencies`` maps address -> "ETH"/"WETH" for
-    buys. ``hot=True`` (large signal, with a role ping) marks it with a flame.
+    ``kind`` is "mint" or "buy". ``currencies`` maps address -> "ETH"/"WETH" and
+    ``prices`` maps address -> price in ETH (per buy). ``hot=True`` (large
+    signal, with a role ping) marks it with a flame.
     """
     currencies = currencies or {}
+    prices = prices or {}
     by_type = Counter(wallets.values())
     n = len(wallets)
     breakdown = " · ".join(f"{_pretty(t)} {c}" for t, c in by_type.most_common())
     dominant = by_type.most_common(1)[0][0] if by_type else "TRACKED"
     os_url = opensea_url(chain, contract)
     exp = explorer_url(chain, contract)
-    # payment split for buys: ETH (sweep) vs WETH (accepted offer)
+    # real price paid (per buy). Show a single value or a min–max range.
     pay = ""
-    if kind == "buy" and currencies:
-        cc = Counter(currencies.values())
-        parts = []
-        if cc.get("ETH"):
-            parts.append(f"{cc['ETH']} Ξ")
-        if cc.get("WETH"):
-            parts.append(f"{cc['WETH']} WETH")
-        if parts:
-            pay = "\n💰 " + " · ".join(parts)
+    if kind == "buy":
+        vals = sorted(p for p in prices.values() if p and p > 0)
+        if vals:
+            lo, hi = _fmt_price(vals[0]), _fmt_price(vals[-1])
+            span = lo if lo == hi else f"{lo}–{hi}"
+            has_weth = "WETH" in currencies.values()
+            pay = f"\n💰 {span} Ξ" + (" · incl. WETH" if has_weth else "")
     # up to 10 addresses in the body; mark WETH buyers with (W)
     def _mark(a: str) -> str:
         return " (W)" if currencies.get(a) == "WETH" else ""

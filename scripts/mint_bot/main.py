@@ -132,7 +132,7 @@ def run() -> None:
             for a in alerts:
                 embed = build_embed(name=a.name, chain=a.chain, contract=a.contract,
                                     wallets=a.wallets, hot=a.ping, kind=a.kind,
-                                    currencies=a.currencies)
+                                    currencies=a.currencies, prices=a.prices)
                 try:
                     # ping the role only on a large signal (a.ping)
                     post_alert(webhook, embed, role_id=(role_id if a.ping else None))
