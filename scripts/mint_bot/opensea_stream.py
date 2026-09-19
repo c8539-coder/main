@@ -25,10 +25,10 @@ from websocket import WebSocketApp
 
 log = logging.getLogger("mint_bot.opensea")
 
-# vsn=1.0.0 forces the Phoenix "map" serializer: each message is a JSON object
-# ({topic,event,payload,ref}). Without it the server may use the v2 serializer,
-# which sends arrays ([join_ref,ref,topic,event,payload]) instead.
-STREAM_URL = "wss://stream.openseabeta.com/socket/websocket?token={key}&vsn=1.0.0"
+# OpenSea's Phoenix gateway uses the v2 serializer: incoming messages are JSON
+# arrays ([join_ref, ref, topic, event, payload]). _on_message handles that.
+# (Do not pin vsn=1.0.0 — the server rejects it with a 400 handshake.)
+STREAM_URL = "wss://stream.openseabeta.com/socket/websocket?token={key}"
 WILDCARD_TOPIC = "collection:*"
 
 # OpenSea chain slug -> our internal chain name (for links / naming).
