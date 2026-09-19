@@ -40,10 +40,11 @@ def explorer_url(chain: str, contract: str) -> str | None:
 
 
 def build_embed(*, name: str, chain: str, contract: str,
-                wallets: dict[str, str], hot: bool = False) -> dict:
-    """Build the Discord embed for an "N wallets minting a collection" alert.
+                wallets: dict[str, str], hot: bool = False, kind: str = "mint") -> dict:
+    """Build the Discord embed for an "N wallets minting/buying a collection" alert.
 
-    ``hot=True`` (large signal, with a role ping) marks the alert with a flame.
+    ``kind`` is "mint" or "buy". ``hot=True`` (large signal, with a role ping)
+    marks the alert with a flame.
     """
     by_type = Counter(wallets.values())
     n = len(wallets)
@@ -56,16 +57,17 @@ def build_embed(*, name: str, chain: str, contract: str,
         f"`{a[:6]}…{a[-4:]}` {_pretty(t)}" for a, t in list(wallets.items())[:10]
     )
     more = f" · … +{n - 10} more" if n > 10 else ""
-    icon = "🔥" if hot else "🌱"
+    verb = "Minting" if kind == "mint" else "Buying"
+    icon = "🔥" if hot else ("🌱" if kind == "mint" else "🛒")
     # links together at the bottom
     links = f"🔗 [View Collection]({os_url})" + (f" · 🔎 [Explorer]({exp})" if exp else "")
     return {
         # embed title = bold first line with the collection name
-        "title": f"{icon} {n} Wallet Minting {name}",
+        "title": f"{icon} {n} Wallet {verb} {name}",
         "url": os_url,
         "description": f"{breakdown}\n\n{sample}{more}\n\n{links}",
         "color": TYPE_COLOR.get(dominant, DEFAULT_COLOR),
-        "footer": {"text": "Wallet mint tracker"},
+        "footer": {"text": "Wallet tracker"},
     }
 
 

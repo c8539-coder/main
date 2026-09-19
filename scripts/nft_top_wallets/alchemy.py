@@ -200,18 +200,20 @@ class AlchemyClient:
         """Current block number."""
         return int(self._rpc("eth_blockNumber", []), 16)
 
-    def mints_since(
+    def transfers_since(
         self,
         from_block: int,
         *,
         to_block: str = "latest",
-        max_pages: int = 40,
+        mints_only: bool = False,
+        max_pages: int = 120,
     ) -> Iterator[dict]:
-        """All mints (transfers from 0x0) starting at block ``from_block``.
+        """NFT transfers starting at block ``from_block`` (paginated).
 
-        Yields alchemy_getAssetTransfers transfers with ``fromAddress = 0x0``,
-        paginated. Each transfer has ``to``, ``rawContract.address`` and
-        ``blockNum`` (hex).
+        ``mints_only=True`` restricts to mints (``fromAddress = 0x0``); otherwise
+        all transfers are returned so the caller can split mint vs secondary buy
+        by the transfer's ``from``. Each transfer has ``from``, ``to``,
+        ``rawContract.address`` and ``blockNum`` (hex).
         """
         page_key: str | None = None
         pages = 0
@@ -222,10 +224,11 @@ class AlchemyClient:
                 "withMetadata": True,
                 "excludeZeroValue": False,
                 "maxCount": "0x3e8",  # 1000
-                "fromAddress": ZERO_ADDRESS,
                 "fromBlock": hex(from_block),
                 "toBlock": to_block,
             }
+            if mints_only:
+                params["fromAddress"] = ZERO_ADDRESS
             if page_key:
                 params["pageKey"] = page_key
             result = self._rpc("alchemy_getAssetTransfers", [params])
@@ -235,3 +238,10 @@ class AlchemyClient:
             pages += 1
             if not page_key:
                 break
+
+    def mints_since(self, from_block: int, *, to_block: str = "latest",
+                    max_pages: int = 40) -> Iterator[dict]:
+        """All mints (transfers from 0x0) starting at ``from_block``."""
+        yield from self.transfers_since(
+            from_block, to_block=to_block, mints_only=True, max_pages=max_pages
+        )

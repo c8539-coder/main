@@ -1,7 +1,8 @@
-"""Mint-tracker core: poll mints, filter by the watchlist, aggregate per contract.
+"""Tracker core: poll NFT transfers, keep watchlist wallets, aggregate per
+contract and event kind (mint or buy/sweep).
 
 State is JSON-serializable so it survives restarts (last processed block per
-chain + wallets accumulated per contract).
+chain + wallets accumulated per contract/kind).
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ import time
 from dataclasses import dataclass, field
 
 from scripts.nft_top_wallets.alchemy import AlchemyClient
+from scripts.nft_top_wallets.config import ZERO_ADDRESS
 
 
 @dataclass
@@ -17,6 +19,7 @@ class Alert:
     chain: str
     contract: str
     name: str
+    kind: str                # "mint" or "buy"
     wallets: dict[str, str]  # address -> type
     ping: bool = False       # whether to ping the role (large signal)
 
@@ -28,8 +31,9 @@ class MintTracker:
     min_wallets: int = 5                      # threshold for the quiet alert (no ping)
     ping_wallets: int = 15                    # threshold at which the role is pinged
     ping_step: int = 15                       # re-ping every +N wallets (0 = ping once)
-    window_seconds: int = 6 * 3600            # window over which mints per contract accrue
+    window_seconds: int = 6 * 3600            # window over which events per contract accrue
     backfill_blocks: int = 300                # how many blocks back to scan on first start
+    track_buys: bool = True                   # also alert on buys/sweeps, not just mints
     state: dict = field(default_factory=lambda: {"last_block": {}, "contracts": {}})
 
     # ------------------------------------------------------------------
@@ -53,15 +57,19 @@ class MintTracker:
             return
 
         contracts = self.state["contracts"]
-        for t in client.mints_since(start + 1, to_block=hex(current)):
+        # mints_only when we don't care about buys -> lighter feed
+        for t in client.transfers_since(start + 1, to_block=hex(current),
+                                        mints_only=not self.track_buys):
             to = (t.get("to") or "").lower()
             if to not in self.watchlist:
                 continue
+            frm = (t.get("from") or "").lower()
+            kind = "mint" if frm == ZERO_ADDRESS else "buy"
             rc = t.get("rawContract") or {}
             contract = (rc.get("address") or "").lower()
             if not contract:
                 continue
-            key = f"{chain}|{contract}"
+            key = f"{chain}|{kind}|{contract}"
             entry = contracts.setdefault(
                 key, {"wallets": {}, "first": now, "alerted": False, "name": None}
             )
@@ -71,31 +79,29 @@ class MintTracker:
     def _collect_alerts(self) -> list[Alert]:
         """Quiet alert at >= min_wallets, a separate ping alert at >= ping_wallets.
 
-        A contract can yield up to two alerts: the quiet one (reached 5) and, if
-        it grows to 15, a second one that pings the role.
+        Each contract+kind can yield up to two alerts: the quiet one (reached the
+        base threshold) and, once it grows to the ping threshold, one that pings.
         """
         alerts: list[Alert] = []
         for key, entry in self.state["contracts"].items():
             n = len(entry["wallets"])
             last_ping = entry.get("pinged_at", 0)
             hit_base = n >= self.min_wallets and not entry.get("alerted")
-            # first ping at ping_wallets; re-ping once it grew by ping_step
             if last_ping == 0:
                 hit_ping = n >= self.ping_wallets
             else:
                 hit_ping = self.ping_step > 0 and n >= last_ping + self.ping_step
             if not (hit_base or hit_ping):
                 continue
-            chain, contract = key.split("|", 1)
+            chain, kind, contract = key.split("|", 2)
             if not entry["name"]:
                 entry["name"] = self._contract_name(chain, contract)
             entry["alerted"] = True
             if hit_ping:
                 entry["pinged"] = True
                 entry["pinged_at"] = n
-            alerts.append(
-                Alert(chain, contract, entry["name"], dict(entry["wallets"]), ping=hit_ping)
-            )
+            alerts.append(Alert(chain, contract, entry["name"], kind,
+                                dict(entry["wallets"]), ping=hit_ping))
         return alerts
 
     def _prune(self, now: float) -> None:

@@ -79,6 +79,7 @@ def run() -> None:
     min_wallets = int(os.getenv("MINT_ALERT_MIN", "5"))
     ping_wallets = int(os.getenv("MINT_PING_MIN", "15"))
     ping_step = int(os.getenv("MINT_PING_STEP", "15"))
+    track_buys = os.getenv("TRACK_BUYS", "1") not in ("0", "false", "False", "")
     poll_s = max(15, int(os.getenv("MINT_POLL_SECONDS", "60")))
     window_s = int(os.getenv("MINT_WINDOW_SECONDS", str(6 * 3600)))
     backfill = int(os.getenv("MINT_BACKFILL_BLOCKS", "300"))
@@ -107,28 +108,31 @@ def run() -> None:
     clients = _build_clients(settings, chains)
     tracker = MintTracker(
         watchlist=watchlist, clients=clients, min_wallets=min_wallets,
-        ping_wallets=ping_wallets, ping_step=ping_step,
+        ping_wallets=ping_wallets, ping_step=ping_step, track_buys=track_buys,
         window_seconds=window_s, backfill_blocks=backfill,
         state=_load_state(state_file),
     )
 
-    log.info("Started: %d wallets, chains=%s, alert>=%d, ping>=%d, poll every %ds",
-             len(watchlist), list(clients), min_wallets, ping_wallets, poll_s)
+    log.info("Started: %d wallets, chains=%s, mints%s, alert>=%d, ping>=%d, poll every %ds",
+             len(watchlist), list(clients), "+buys" if track_buys else "",
+             min_wallets, ping_wallets, poll_s)
 
     while True:
         try:
             alerts = tracker.poll()
             for a in alerts:
-                embed = build_embed(name=a.name, chain=a.chain,
-                                    contract=a.contract, wallets=a.wallets, hot=a.ping)
+                embed = build_embed(name=a.name, chain=a.chain, contract=a.contract,
+                                    wallets=a.wallets, hot=a.ping, kind=a.kind)
                 try:
                     # ping the role only on a large signal (a.ping)
                     post_alert(webhook, embed, role_id=(role_id if a.ping else None))
-                    log.info("Alert%s: %d wallets minting %s (%s)",
-                             " (PING)" if a.ping else "", len(a.wallets), a.name, a.chain)
+                    log.info("Alert%s: %d wallets %s %s (%s)",
+                             " (PING)" if a.ping else "",
+                             len(a.wallets), "minting" if a.kind == "mint" else "buying",
+                             a.name, a.chain)
                 except Exception as exc:  # noqa: BLE001
                     log.error("Failed to send alert to Discord: %s", exc)
-                    tracker.state["contracts"][f"{a.chain}|{a.contract}"]["alerted"] = False
+                    tracker.state["contracts"][f"{a.chain}|{a.kind}|{a.contract}"]["alerted"] = False
             _save_state(state_file, tracker.state)
         except Exception as exc:  # noqa: BLE001
             log.error("Poll loop error: %s", exc)
