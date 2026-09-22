@@ -5,6 +5,10 @@
 data/
 *.log
 
+# Generated earnings exports
+earnings.csv
+*.earnings.csv
+
 # Python
 __pycache__/
 *.py[cod]
