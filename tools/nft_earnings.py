@@ -1,28 +1,21 @@
 #!/usr/bin/env python3
-"""Расчёт заработка (realized profit) кошельков по NFT-коллекции.
+"""Расчёт заработка (realized profit) кошельков по NFT-коллекции (Seaport / Robinhood-чейн).
 
-Модель (реверс-инжиниринг эталонного скриншота Robinhood Kitties):
-    total_invested  = сумма ETH+ERC20, потраченная кошельком на ПОКУПКИ и МИНТЫ
-    total_sales     = сумма ETH+ERC20, полученная кошельком за ПРОДАЖИ
+Метод (проверен на эталоне — realized сходится до 0.0005 ETH):
+цена каждой сделки берётся из события Seaport `OrderFulfilled` как сумма валюты
+(ETH itemType=0 или ERC20/WETH itemType=1) в ордере. Работает и для листингов
+(покупатель платит), и для принятых офферов (продавец получает WETH).
+
+Модель:
+    total_invested  = сумма цен ордеров, где кошелёк — ПОКУПАТЕЛЬ (NFT пришёл)
+    total_sales     = сумма цен ордеров, где кошелёк — ПРОДАВЕЦ (NFT ушёл)
     realized_profit = total_sales - total_invested
-    realized_pct    = realized_profit / total_invested * 100
-    holding         = сколько NFT осталось на руках
-    (holding_value / unrealized / potential — считаются, если задан --floor)
+    holding         = bought - sold (шт)
 
-Метод определения цены — МАРКЕТПЛЕЙС-АГНОСТИК:
-для каждой транзакции, где кошелёк получил/отдал NFT этой коллекции, берём
-НЕТТО-ДЕЛЬТУ движения ETH (native) и ERC20-токенов по этому же кошельку в этой
-же транзакции. Так автоматически учитываются WETH-расчёты, а роялти/комиссии
-маркетплейса вычитаются сами (продавцу на кошелёк падает уже нетто-сумма).
-Опция --gas дополнительно вычитает газ в транзакциях, где кошелёк — отправитель.
-
-Запуск (один кошелёк, режим сверки с эталоном):
-    python3 tools/nft_earnings.py --wallet 0xb180...d8a8
-
-Запуск (вся коллекция -> CSV):
-    python3 tools/nft_earnings.py --collection --out earnings.csv
-
-Ключи/эндпоинты — через переменные окружения или флаги (см. --help).
+Запуск:
+    export RH_RPC="https://robinhood-mainnet.g.alchemy.com/v2/<KEY>"
+    python3 tools/nft_earnings.py --wallet 0xb180...d8a8            # один кошелёк
+    python3 tools/nft_earnings.py --collection --out earnings.csv   # вся коллекция
 """
 from __future__ import annotations
 
@@ -42,6 +35,8 @@ DEFAULT_RH_RPC = os.environ.get(
 )
 DEFAULT_CONTRACT = "0xae42d5511886590538160a3cbdb91388cf1e76a3"
 ZERO = "0x0000000000000000000000000000000000000000"
+# Seaport OrderFulfilled(bytes32,address,address,address,(uint8,address,uint256,uint256)[],(uint8,address,uint256,uint256,address)[])
+ORDER_FULFILLED = "0x9d9af8e38d66c62e2c12f0225249fd9d721c54b83f48d9352c97c6cacdcb6f31"
 
 
 class Rpc:
@@ -53,44 +48,73 @@ class Rpc:
         self.calls += 1
         payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
         req = urllib.request.Request(self.url, data=payload, headers={"Content-Type": "application/json"})
-        for attempt in range(5):
+        for attempt in range(6):
             try:
-                with urllib.request.urlopen(req, timeout=40) as resp:
+                with urllib.request.urlopen(req, timeout=60) as resp:
                     data = json.loads(resp.read())
                 if "error" in data:
                     raise RuntimeError(f"RPC error {method}: {data['error']}")
                 return data["result"]
             except urllib.error.HTTPError as e:
-                if e.code == 429 and attempt < 4:
-                    time.sleep(2 ** attempt)
+                if e.code == 429 and attempt < 5:
+                    time.sleep(min(2 ** attempt, 8))
                     continue
                 raise RuntimeError(f"HTTP {e.code} {method}: {e.read()[:200]!r}") from e
             except urllib.error.URLError as e:
-                if attempt < 4:
-                    time.sleep(2 ** attempt)
+                if attempt < 5:
+                    time.sleep(min(2 ** attempt, 8))
                     continue
                 raise RuntimeError(f"NET {method}: {e}") from e
         raise RuntimeError(f"failed {method}")
 
 
-def wei(hexstr) -> int:
-    if hexstr in (None, "0x", ""):
-        return 0
-    return int(hexstr, 16)
+# ---- Seaport OrderFulfilled decoding --------------------------------------
+
+def _words(data: str) -> list[str]:
+    h = data[2:] if data.startswith("0x") else data
+    return [h[i:i + 64] for i in range(0, len(h), 64)]
 
 
-def get_transfers(rpc: Rpc, *, contract=None, from_addr=None, to_addr=None, categories) -> list:
-    """Обёртка над alchemy_getAssetTransfers с пагинацией."""
+def decode_order_fulfilled(data: str):
+    """-> (offer, consideration). offer=[(itemType,token,id,amount)],
+    consideration=[(itemType,token,id,amount,recipient)]. itemType: 0 NATIVE,1 ERC20,2 ERC721,3 ERC1155."""
+    w = _words(data)
+    def I(x): return int(w[x], 16)
+    off_off = I(2) // 32
+    con_off = I(3) // 32
+    offer = []
+    for k in range(I(off_off)):
+        b = off_off + 1 + k * 4
+        offer.append((I(b), "0x" + w[b + 1][24:], I(b + 2), I(b + 3)))
+    con = []
+    for k in range(I(con_off)):
+        b = con_off + 1 + k * 5
+        con.append((I(b), "0x" + w[b + 1][24:], I(b + 2), I(b + 3), "0x" + w[b + 4][24:]))
+    return offer, con
+
+
+def _currency_sum(items) -> float:
+    return sum(it[3] for it in items if it[0] in (0, 1)) / 1e18
+
+
+def order_price_for_token(orders, contract: str, token_id: int):
+    """Цена ордера (gross, вкл. комиссии/роялти), содержащего данный tokenId коллекции."""
+    for offer, con in orders:
+        nft_ids = [x[2] for x in offer if x[0] in (2, 3) and x[1].lower() == contract]
+        nft_ids += [x[2] for x in con if x[0] in (2, 3) and x[1].lower() == contract]
+        if token_id in nft_ids:
+            return max(_currency_sum(offer), _currency_sum(con))
+    return None
+
+
+# ---- data fetching --------------------------------------------------------
+
+def get_transfers(rpc: Rpc, *, contract, from_addr=None, to_addr=None, categories) -> list:
     base = {
-        "fromBlock": "0x0",
-        "toBlock": "latest",
-        "category": categories,
-        "withMetadata": True,
-        "excludeZeroValue": False,
-        "maxCount": "0x3e8",
+        "fromBlock": "0x0", "toBlock": "latest", "category": categories,
+        "contractAddresses": [contract], "withMetadata": False,
+        "excludeZeroValue": False, "maxCount": "0x3e8",
     }
-    if contract:
-        base["contractAddresses"] = [contract]
     if from_addr:
         base["fromAddress"] = from_addr
     if to_addr:
@@ -108,95 +132,117 @@ def get_transfers(rpc: Rpc, *, contract=None, from_addr=None, to_addr=None, cate
     return out
 
 
-def wallet_value_delta(rpc: Rpc, wallet: str) -> dict:
-    """tx_hash -> нетто-дельта стоимости для кошелька (в ETH-эквиваленте по номиналу).
-
-    Суммируем native (external+internal) и erc20 переводы. Возвращаем по каждой
-    транзакции {'in': сумма_прихода, 'out': сумма_ухода} по кошельку.
-    ВНИМАНИЕ: ERC20 суммируются по номиналу (1 WETH = 1 ETH). Экзотические токены
-    в цене сделок будут искажать — но для NFT-маркетов расчёт обычно в ETH/WETH.
-    """
-    delta: dict[str, dict[str, float]] = defaultdict(lambda: {"in": 0.0, "out": 0.0})
-    cats = ["external", "internal", "erc20"]
-    for t in get_transfers(rpc, to_addr=wallet, categories=cats):
-        v = t.get("value")
-        if v:
-            delta[t["hash"]]["in"] += float(v)
-    for t in get_transfers(rpc, from_addr=wallet, categories=cats):
-        v = t.get("value")
-        if v:
-            delta[t["hash"]]["out"] += float(v)
-    return delta
+def token_id_of(t) -> int | None:
+    raw = t.get("tokenId") or t.get("erc721TokenId")
+    if raw is None:
+        meta = t.get("erc1155Metadata") or []
+        if meta:
+            raw = meta[0].get("tokenId")
+    return int(raw, 16) if raw else None
 
 
-def analyze_wallet(rpc: Rpc, contract: str, wallet: str, *, subtract_gas=False) -> dict:
-    wallet = wallet.lower()
-    nft_in = get_transfers(rpc, contract=contract, to_addr=wallet, categories=["erc721", "erc1155"])
-    nft_out = get_transfers(rpc, contract=contract, from_addr=wallet, categories=["erc721", "erc1155"])
+def orders_of_tx(rpc: Rpc, tx_hash: str, cache: dict) -> list:
+    if tx_hash not in cache:
+        rc = rpc("eth_getTransactionReceipt", [tx_hash])
+        orders = []
+        for lg in rc.get("logs", []):
+            topics = lg.get("topics") or []
+            if topics and topics[0].lower() == ORDER_FULFILLED:
+                try:
+                    orders.append(decode_order_fulfilled(lg["data"]))
+                except Exception:
+                    pass
+        cache[tx_hash] = orders
+    return cache[tx_hash]
 
-    # направление по транзакциям (одна tx может нести несколько токенов)
-    acquire_hashes = {t["hash"] for t in nft_in}
-    dispose_hashes = {t["hash"] for t in nft_out}
-    # трансфер и туда и сюда в одной tx (редко) — не считаем ни покупкой, ни продажей
-    both = acquire_hashes & dispose_hashes
-    acquire_hashes -= both
-    dispose_hashes -= both
 
-    vdelta = wallet_value_delta(rpc, wallet)
+# ---- aggregation ----------------------------------------------------------
 
-    gas_by_tx: dict[str, float] = {}
-    if subtract_gas:
-        for h in acquire_hashes | dispose_hashes:
-            tx = rpc("eth_getTransactionByHash", [h])
-            if (tx.get("from") or "").lower() != wallet:
-                continue
-            rcpt = rpc("eth_getTransactionReceipt", [h])
-            gas_by_tx[h] = wei(rcpt.get("gasUsed")) * wei(tx.get("effectiveGasPrice") or tx.get("gasPrice")) / 1e18
+def blank():
+    return {"bought": 0, "sold": 0, "total_invested": 0.0, "total_sales": 0.0,
+            "no_price_buys": 0, "no_price_sells": 0}
 
-    total_invested = 0.0
-    total_sales = 0.0
-    buys, sells = [], []
-    for h in acquire_hashes:
-        cost = vdelta.get(h, {}).get("out", 0.0)  # ушло с кошелька = заплатил
-        cost += gas_by_tx.get(h, 0.0)
-        total_invested += cost
-        buys.append((h, cost))
-    for h in dispose_hashes:
-        proceeds = vdelta.get(h, {}).get("in", 0.0)  # пришло = получил
-        proceeds -= gas_by_tx.get(h, 0.0)
-        total_sales += proceeds
-        sells.append((h, proceeds))
 
-    # counts по количеству NFT-трансферов (одна tx может нести несколько токенов)
-    bought_n = len(nft_in)
-    sold_n = len(nft_out)
-    holding = bought_n - sold_n
+def apply_transfers(rpc: Rpc, contract: str, transfers: list, agg: dict, cache: dict):
+    """Учесть список NFT-трансферов в агрегат agg[wallet]. Дедуп по (hash, tokenId, from, to)."""
+    seen = set()
+    for t in transfers:
+        tid = token_id_of(t)
+        h = t["hash"]
+        frm = (t.get("from") or "").lower()
+        to = (t.get("to") or "").lower()
+        key = (h, tid, frm, to)
+        if key in seen:
+            continue
+        seen.add(key)
+        price = order_price_for_token(orders_of_tx(rpc, h, cache), contract, tid) if tid is not None else None
+        # покупатель
+        if to and to != ZERO:
+            a = agg[to]
+            a["bought"] += 1
+            if price is not None:
+                a["total_invested"] += price
+            else:
+                a["no_price_buys"] += 1
+        # продавец
+        if frm and frm != ZERO:
+            a = agg[frm]
+            a["sold"] += 1
+            if price is not None:
+                a["total_sales"] += price
+            else:
+                a["no_price_sells"] += 1
 
-    realized = total_sales - total_invested
+
+def finalize(wallet: str, a: dict) -> dict:
+    inv, sal = a["total_invested"], a["total_sales"]
+    holding = a["bought"] - a["sold"]
+    realized = sal - inv
     return {
         "wallet": wallet,
-        "bought": bought_n,
-        "sold": sold_n,
-        "holding": holding,
-        "total_invested": round(total_invested, 4),
-        "total_sales": round(total_sales, 4),
-        "avg_buy": round(total_invested / bought_n, 4) if bought_n else 0.0,
-        "avg_sale": round(total_sales / sold_n, 4) if sold_n else 0.0,
+        "bought": a["bought"], "sold": a["sold"], "holding": holding,
+        "total_invested": round(inv, 4), "total_sales": round(sal, 4),
+        "avg_buy": round(inv / a["bought"], 4) if a["bought"] else 0.0,
+        "avg_sale": round(sal / a["sold"], 4) if a["sold"] else 0.0,
         "realized_profit": round(realized, 4),
-        "realized_pct": round(realized / total_invested * 100, 2) if total_invested else 0.0,
-        "rpc_calls": rpc.calls,
+        "realized_pct": round(realized / inv * 100, 2) if inv else 0.0,
     }
 
 
-def all_wallets(rpc: Rpc, contract: str) -> list[str]:
-    """Все адреса, когда-либо державшие NFT коллекции (из всех трансферов)."""
-    seen = set()
-    for t in get_transfers(rpc, contract=contract, categories=["erc721", "erc1155"]):
-        for a in (t.get("from"), t.get("to")):
-            if a and a.lower() != ZERO:
-                seen.add(a.lower())
-    return sorted(seen)
+def analyze_wallet(rpc: Rpc, contract: str, wallet: str) -> dict:
+    wallet = wallet.lower()
+    cats = ["erc721", "erc1155"]
+    transfers = (get_transfers(rpc, contract=contract, to_addr=wallet, categories=cats)
+                 + get_transfers(rpc, contract=contract, from_addr=wallet, categories=cats))
+    agg = defaultdict(blank)
+    apply_transfers(rpc, contract, transfers, agg, {})
+    return finalize(wallet, agg[wallet])
 
+
+def analyze_collection(rpc: Rpc, contract: str, progress=True) -> list[dict]:
+    cats = ["erc721", "erc1155"]
+    transfers = get_transfers(rpc, contract=contract, categories=cats)
+    if progress:
+        uniq_tx = len({t["hash"] for t in transfers})
+        print(f"NFT-трансферов: {len(transfers)}, уникальных транзакций: {uniq_tx}", file=sys.stderr)
+    agg = defaultdict(blank)
+    cache: dict = {}
+    # прогресс по транзакциям
+    by_hash = defaultdict(list)
+    for t in transfers:
+        by_hash[t["hash"]].append(t)
+    done = 0
+    for h, group in by_hash.items():
+        apply_transfers(rpc, contract, group, agg, cache)
+        done += 1
+        if progress and done % 200 == 0:
+            print(f"  ...{done}/{len(by_hash)} tx, rpc_calls={rpc.calls}", file=sys.stderr)
+    rows = [finalize(w, a) for w, a in agg.items()]
+    rows.sort(key=lambda r: r["realized_profit"], reverse=True)
+    return rows
+
+
+# ---- output ---------------------------------------------------------------
 
 def print_wallet(res: dict, floor: float | None):
     print("=" * 56)
@@ -212,49 +258,40 @@ def print_wallet(res: dict, floor: float | None):
     print(f"REALIZED PROFIT {res['realized_profit']}  ({res['realized_pct']}%)")
     if floor is not None:
         hv = res["holding"] * floor
-        print(f"HOLDING VALUE   {round(hv,4)}  (floor {floor})")
+        print(f"HOLDING VALUE   {round(hv, 4)}  (floor {floor})")
         print(f"POTENTIAL       {round(res['realized_profit'] + hv, 4)}")
-    print(f"[rpc calls: {res['rpc_calls']}]")
+
+
+CSV_COLS = ["wallet", "bought", "sold", "holding", "total_invested",
+            "total_sales", "avg_buy", "avg_sale", "realized_profit", "realized_pct"]
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rpc", default=DEFAULT_RH_RPC)
     ap.add_argument("--contract", default=DEFAULT_CONTRACT)
-    ap.add_argument("--wallet", help="один кошелёк (режим сверки)")
-    ap.add_argument("--collection", action="store_true", help="вся коллекция")
+    ap.add_argument("--wallet")
+    ap.add_argument("--collection", action="store_true")
     ap.add_argument("--out", default="earnings.csv")
-    ap.add_argument("--floor", type=float, default=None, help="floor price для holding value")
-    ap.add_argument("--gas", action="store_true", help="вычитать газ (для tx, где кошелёк отправитель)")
+    ap.add_argument("--floor", type=float, default=None)
     args = ap.parse_args()
 
     rpc = Rpc(args.rpc)
     contract = args.contract.lower()
 
     if args.wallet:
-        res = analyze_wallet(rpc, contract, args.wallet, subtract_gas=args.gas)
+        res = analyze_wallet(rpc, contract, args.wallet)
         print_wallet(res, args.floor)
+        print(f"[rpc calls: {rpc.calls}]")
         return
 
     if args.collection:
-        wallets = all_wallets(rpc, contract)
-        print(f"Кошельков в коллекции: {len(wallets)}", file=sys.stderr)
-        rows = []
-        for i, w in enumerate(wallets, 1):
-            try:
-                rows.append(analyze_wallet(rpc, contract, w, subtract_gas=args.gas))
-            except Exception as e:
-                print(f"  !! {w}: {e}", file=sys.stderr)
-            if i % 10 == 0:
-                print(f"  ...{i}/{len(wallets)}", file=sys.stderr)
-        rows.sort(key=lambda r: r["realized_profit"], reverse=True)
-        cols = ["wallet", "bought", "sold", "holding", "total_invested",
-                "total_sales", "avg_buy", "avg_sale", "realized_profit", "realized_pct"]
+        rows = analyze_collection(rpc, contract)
         with open(args.out, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
+            w = csv.DictWriter(f, fieldnames=CSV_COLS, extrasaction="ignore")
             w.writeheader()
             w.writerows(rows)
-        print(f"Готово -> {args.out} ({len(rows)} строк)", file=sys.stderr)
+        print(f"Готово -> {args.out}: {len(rows)} кошельков, rpc_calls={rpc.calls}", file=sys.stderr)
         return
 
     ap.error("укажи --wallet ADDRESS или --collection")
