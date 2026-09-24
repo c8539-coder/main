@@ -8,7 +8,9 @@ data/
 # Generated data exports
 earnings.csv
 movements.csv
-*.earnings.csv
+transfers.csv
+wallet_sources.csv
+*.csv
 
 # Python
 __pycache__/
