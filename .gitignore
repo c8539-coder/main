@@ -5,8 +5,9 @@
 data/
 *.log
 
-# Generated earnings exports
+# Generated data exports
 earnings.csv
+movements.csv
 *.earnings.csv
 
 # Python
