@@ -39,6 +39,10 @@ ZERO = "0x0000000000000000000000000000000000000000"
 ORDER_FULFILLED = "0x9d9af8e38d66c62e2c12f0225249fd9d721c54b83f48d9352c97c6cacdcb6f31"
 
 
+class CapacityError(RuntimeError):
+    """Исчерпан месячный лимит Alchemy — нужен новый ключ / апгрейд / ждать сброса."""
+
+
 class Rpc:
     def __init__(self, url: str):
         self.url = url
@@ -56,10 +60,13 @@ class Rpc:
                     raise RuntimeError(f"RPC error {method}: {data['error']}")
                 return data["result"]
             except urllib.error.HTTPError as e:
+                body = e.read()[:300]
+                if b"capacity limit" in body.lower():
+                    raise CapacityError("Alchemy monthly capacity limit exceeded") from e
                 if e.code == 429 and attempt < 5:
                     time.sleep(min(2 ** attempt, 8))
                     continue
-                raise RuntimeError(f"HTTP {e.code} {method}: {e.read()[:200]!r}") from e
+                raise RuntimeError(f"HTTP {e.code} {method}: {body!r}") from e
             except urllib.error.URLError as e:
                 if attempt < 5:
                     time.sleep(min(2 ** attempt, 8))
@@ -84,10 +91,13 @@ class Rpc:
                     out[item.get("id")] = item.get("result")
                 return out
             except urllib.error.HTTPError as e:
+                body = e.read()[:300]
+                if b"capacity limit" in body.lower():
+                    raise CapacityError("Alchemy monthly capacity limit exceeded") from e
                 if e.code == 429 and attempt < 5:
                     time.sleep(min(2 ** attempt, 8))
                     continue
-                raise RuntimeError(f"HTTP {e.code} batch: {e.read()[:200]!r}") from e
+                raise RuntimeError(f"HTTP {e.code} batch: {body!r}") from e
             except urllib.error.URLError as e:
                 if attempt < 5:
                     time.sleep(min(2 ** attempt, 8))

@@ -23,7 +23,7 @@ import sys
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from nft_earnings import DEFAULT_RH_RPC, ZERO, Rpc  # noqa: E402
+from nft_earnings import CapacityError, DEFAULT_RH_RPC, ZERO, Rpc  # noqa: E402
 from nft_sources import classify_movements, write_movements  # noqa: E402
 from nft_watchlist import build_watchlist, write_watchlist, print_watchlist  # noqa: E402
 
@@ -80,7 +80,12 @@ def main():
     rpc = Rpc(args.rpc)
     print(f"=== {name} ({contract}) ===", file=sys.stderr)
 
-    rows = classify_movements(rpc, contract)          # тяжёлый проход, один раз
+    try:
+        rows = classify_movements(rpc, contract)      # тяжёлый проход, один раз
+    except CapacityError:
+        print("!! ЛИМИТ Alchemy исчерпан (monthly capacity). Нужен новый ключ / апгрейд / "
+              "ждать сброса. Коллекция пропущена.", file=sys.stderr)
+        sys.exit(2)
     write_movements(rows, p("movements.csv"))
 
     earn = earnings_from_movements(rows)
