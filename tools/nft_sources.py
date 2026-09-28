@@ -65,18 +65,16 @@ def orders_of_tx(rpc: Rpc, tx_hash: str, cache: dict) -> list:
     return cache[tx_hash]
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--rpc", default=DEFAULT_RH_RPC)
-    ap.add_argument("--contract", default=DEFAULT_CONTRACT)
-    ap.add_argument("--out", default="movements.csv")
-    args = ap.parse_args()
+MOVEMENT_COLS = ["time", "tokenId", "from", "to", "tx", "source", "price"]
 
-    rpc = Rpc(args.rpc)
-    contract = args.contract.lower()
 
+def classify_movements(rpc: Rpc, contract: str, progress=True) -> list:
+    """Тяжёлый проход (один раз на коллекцию): все трансферы + Seaport-разбор +
+    цены минтов -> список movement-строк с колонкой source."""
+    contract = contract.lower()
     transfers = fetch_all_transfers(rpc, contract)
-    print(f"NFT-трансферов: {len(transfers)}", file=sys.stderr)
+    if progress:
+        print(f"NFT-трансферов: {len(transfers)}", file=sys.stderr)
 
     # цена/кол-во минтов по каждой минт-транзакции
     mint_txs = defaultdict(int)
@@ -87,7 +85,7 @@ def main():
     for i, h in enumerate(mint_txs, 1):
         tx = rpc("eth_getTransactionByHash", [h])
         mint_native[h] = int(tx.get("value", "0x0"), 16) / 1e18
-        if i % 100 == 0:
+        if progress and i % 100 == 0:
             print(f"  минт-tx {i}/{len(mint_txs)}", file=sys.stderr)
 
     cache: dict = {}
@@ -124,14 +122,32 @@ def main():
                 "tx": h, "source": source, "price": round(price, 6),
             })
         done += 1
-        if done % 200 == 0:
+        if progress and done % 200 == 0:
             print(f"  ...{done}/{len(by_hash)} tx, rpc_calls={rpc.calls}", file=sys.stderr)
 
     rows.sort(key=lambda r: r["time"])
-    with open(args.out, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["time", "tokenId", "from", "to", "tx", "source", "price"])
+    return rows
+
+
+def write_movements(rows, path):
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=MOVEMENT_COLS)
         w.writeheader()
         w.writerows(rows)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--rpc", default=DEFAULT_RH_RPC)
+    ap.add_argument("--contract", default=DEFAULT_CONTRACT)
+    ap.add_argument("--out", default="movements.csv")
+    args = ap.parse_args()
+
+    rpc = Rpc(args.rpc)
+    contract = args.contract.lower()
+
+    rows = classify_movements(rpc, contract)
+    write_movements(rows, args.out)
 
     # ---- сводка ----
     by_src = Counter(r["source"] for r in rows)

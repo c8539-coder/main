@@ -31,15 +31,9 @@ from collections import defaultdict
 ZERO = "0x0000000000000000000000000000000000000000"
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--in", dest="inp", default="movements.csv")
-    ap.add_argument("--out", default="watchlist.csv")
-    ap.add_argument("--min-trades", type=int, default=3, help="мин. сделок для watch=1")
-    ap.add_argument("--min-winrate", type=float, default=0.5, help="мин. win-rate для watch=1")
-    args = ap.parse_args()
-
-    rows = list(csv.DictReader(open(args.inp)))
+def build_watchlist(rows, min_trades=3, min_winrate=0.5):
+    """rows: список dict с ключами tokenId, from, to, source, price, time.
+    Возвращает отсортированный список кошельков с matched-PnL и флагами."""
     for r in rows:
         r["price"] = float(r["price"])
 
@@ -116,7 +110,7 @@ def main():
         wr = d["wins"] / ct if ct else 0.0
         roi = d["clean_profit"] / d["invested"] if d["invested"] else 0.0
         secondary = (d["bought"] == 0 and d["mint_paid"] == 0 and d["transfer_in"] > 0)
-        watch = int(ct >= args.min_trades and wr >= args.min_winrate
+        watch = int(ct >= min_trades and wr >= min_winrate
                     and d["clean_profit"] > 0 and not secondary and w not in reciprocal)
         out.append({
             "wallet": w,
@@ -138,23 +132,41 @@ def main():
             "last_seen": d["last_seen"][:10],
         })
     out.sort(key=lambda r: (r["watch"], r["clean_profit"]), reverse=True)
+    return out
 
-    cols = ["wallet", "watch", "clean_profit", "clean_trades", "win_rate", "avg_profit",
-            "roi", "invested", "holdings", "held_cost", "bought", "mint_paid",
-            "transfer_in", "transfer_flips", "is_reciprocal", "likely_secondary", "last_seen"]
-    with open(args.out, "w", newline="") as f:
-        wr = csv.DictWriter(f, fieldnames=cols)
+
+WATCHLIST_COLS = ["wallet", "watch", "clean_profit", "clean_trades", "win_rate", "avg_profit",
+                  "roi", "invested", "holdings", "held_cost", "bought", "mint_paid",
+                  "transfer_in", "transfer_flips", "is_reciprocal", "likely_secondary", "last_seen"]
+
+
+def write_watchlist(out, path):
+    with open(path, "w", newline="") as f:
+        wr = csv.DictWriter(f, fieldnames=WATCHLIST_COLS)
         wr.writeheader()
         wr.writerows(out)
 
+
+def print_watchlist(out, top=30):
     watched = [r for r in out if r["watch"]]
-    print(f"Всего кошельков: {len(out)}")
-    print(f"Прошли фильтр watch=1 (сделок>={args.min_trades}, win>={args.min_winrate}, "
-          f"профит>0, не secondary, не reciprocal): {len(watched)}")
+    print(f"Всего кошельков: {len(out)}  |  прошли фильтр watch=1: {len(watched)}")
     print(f"\n{'#':>2} {'wallet':44}{'profit':>9}{'trades':>7}{'win':>6}{'roi':>7}{'hold':>5}  last")
-    for i, r in enumerate(watched[:30], 1):
+    for i, r in enumerate(watched[:top], 1):
         print(f"{i:>2} {r['wallet']:44}{r['clean_profit']:>9.4f}{r['clean_trades']:>7}"
               f"{r['win_rate']*100:>5.0f}%{r['roi']*100:>6.0f}%{r['holdings']:>5}  {r['last_seen']}")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--in", dest="inp", default="movements.csv")
+    ap.add_argument("--out", default="watchlist.csv")
+    ap.add_argument("--min-trades", type=int, default=3)
+    ap.add_argument("--min-winrate", type=float, default=0.5)
+    args = ap.parse_args()
+    rows = list(csv.DictReader(open(args.inp)))
+    out = build_watchlist(rows, args.min_trades, args.min_winrate)
+    write_watchlist(out, args.out)
+    print_watchlist(out)
     print(f"\n-> {args.out}")
 
 
