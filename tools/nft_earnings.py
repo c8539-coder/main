@@ -67,6 +67,48 @@ class Rpc:
                 raise RuntimeError(f"NET {method}: {e}") from e
         raise RuntimeError(f"failed {method}")
 
+    def batch(self, calls: list) -> dict:
+        """calls: [(method, params), ...]. Возвращает {index: result|None}.
+        Один HTTP-запрос на весь батч (JSON-RPC 2.0 batch)."""
+        self.calls += 1
+        payload = [{"jsonrpc": "2.0", "id": i, "method": m, "params": p}
+                   for i, (m, p) in enumerate(calls)]
+        body = json.dumps(payload).encode()
+        req = urllib.request.Request(self.url, data=body, headers={"Content-Type": "application/json"})
+        for attempt in range(6):
+            try:
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    data = json.loads(resp.read())
+                out = {}
+                for item in data:
+                    out[item.get("id")] = item.get("result")
+                return out
+            except urllib.error.HTTPError as e:
+                if e.code == 429 and attempt < 5:
+                    time.sleep(min(2 ** attempt, 8))
+                    continue
+                raise RuntimeError(f"HTTP {e.code} batch: {e.read()[:200]!r}") from e
+            except urllib.error.URLError as e:
+                if attempt < 5:
+                    time.sleep(min(2 ** attempt, 8))
+                    continue
+                raise RuntimeError(f"NET batch: {e}") from e
+        raise RuntimeError("failed batch")
+
+
+def orders_from_receipt(rc: dict) -> list:
+    """Декодировать все Seaport OrderFulfilled из receipt."""
+    orders = []
+    if rc:
+        for lg in rc.get("logs", []):
+            tp = lg.get("topics") or []
+            if tp and tp[0].lower() == ORDER_FULFILLED:
+                try:
+                    orders.append(decode_order_fulfilled(lg["data"]))
+                except Exception:
+                    pass
+    return orders
+
 
 # ---- Seaport OrderFulfilled decoding --------------------------------------
 

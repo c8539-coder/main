@@ -27,8 +27,61 @@ from collections import Counter, defaultdict
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from nft_earnings import (  # noqa: E402
     DEFAULT_CONTRACT, DEFAULT_RH_RPC, ORDER_FULFILLED, ZERO, Rpc,
-    decode_order_fulfilled, order_price_for_token, token_id_of,
+    decode_order_fulfilled, order_price_for_token, orders_from_receipt, token_id_of,
 )
+
+
+import time  # noqa: E402
+
+
+def batched(items, size):
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
+
+
+def _batch_get(rpc: Rpc, hashes: list, method: str, size, sleep, progress, label):
+    """Общий батч-фетчер с ретраем null-результатов (rate-limit по CU отдаёт null).
+    Возвращает {hash: raw_result}. Выравнивание проверяется по transactionHash/hash."""
+    out = {}
+    pending = list(hashes)
+    total = len(pending)
+    rounds = 0
+    while pending and rounds < 10:
+        rounds += 1
+        nulls = []
+        for n, chunk in enumerate(batched(pending, size), 1):
+            res = rpc.batch([(method, [h]) for h in chunk])
+            for j, h in enumerate(chunk):
+                rc = res.get(j)
+                got = (rc or {}).get("transactionHash") or (rc or {}).get("hash")
+                if rc is not None and (got or "").lower() == h.lower():
+                    out[h] = rc
+                else:
+                    nulls.append(h)
+            if sleep:
+                time.sleep(sleep)
+            if progress and n % 50 == 0:
+                print(f"  {label}: раунд {rounds}, {len(out)}/{total} (осталось {len(pending) - n * size if rounds == 1 else len(pending)})", file=sys.stderr)
+        pending = nulls
+        if pending:
+            if progress:
+                print(f"  {label}: раунд {rounds} — null'ов осталось {len(pending)}, ретрай", file=sys.stderr)
+            time.sleep(min(0.5 * rounds, 4))
+    for h in pending:
+        out[h] = None
+    return out
+
+
+def fetch_receipts_orders(rpc: Rpc, hashes: list, size=25, sleep=0.0, progress=True) -> dict:
+    """{hash: [orders]} с ретраем null'ов. size=25/sleep=0 держит ~28 rec/s без null (CU-лимит)."""
+    raw = _batch_get(rpc, hashes, "eth_getTransactionReceipt", size, sleep, progress, "receipts")
+    return {h: orders_from_receipt(rc) for h, rc in raw.items()}
+
+
+def fetch_tx_values(rpc: Rpc, hashes: list, size=25, sleep=0.0, progress=True) -> dict:
+    """{hash: native_value_eth} с ретраем null'ов."""
+    raw = _batch_get(rpc, hashes, "eth_getTransactionByHash", size, sleep, progress, "mint-tx")
+    return {h: (int((rc or {}).get("value", "0x0"), 16) / 1e18) for h, rc in raw.items()}
 
 
 def fetch_all_transfers(rpc: Rpc, contract: str) -> list:
@@ -76,54 +129,45 @@ def classify_movements(rpc: Rpc, contract: str, progress=True) -> list:
     if progress:
         print(f"NFT-трансферов: {len(transfers)}", file=sys.stderr)
 
-    # цена/кол-во минтов по каждой минт-транзакции
+    # минты: кол-во на tx + (батчем) нативная сумма tx
     mint_txs = defaultdict(int)
     for t in transfers:
         if (t.get("from") or "").lower() == ZERO:
             mint_txs[t["hash"]] += 1
-    mint_native = {}
-    for i, h in enumerate(mint_txs, 1):
-        tx = rpc("eth_getTransactionByHash", [h])
-        mint_native[h] = int(tx.get("value", "0x0"), 16) / 1e18
-        if progress and i % 100 == 0:
-            print(f"  минт-tx {i}/{len(mint_txs)}", file=sys.stderr)
+    mint_native = fetch_tx_values(rpc, list(mint_txs)) if mint_txs else {}
 
-    cache: dict = {}
+    # receipt'ы для ВСЕХ уникальных tx (батчем) -> Seaport-ордера
+    uniq = list({t["hash"] for t in transfers})
+    if progress:
+        print(f"уникальных tx: {len(uniq)} — тяну receipt'ы батчами по 100", file=sys.stderr)
+    orders_by = fetch_receipts_orders(rpc, uniq, progress=progress)
+
     rows = []
-    by_hash = defaultdict(list)
-    for t in transfers:
-        by_hash[t["hash"]].append(t)
-
-    done = 0
     seen = set()
-    for h, group in by_hash.items():
-        orders = orders_of_tx(rpc, h, cache)
-        for t in group:
-            tid = token_id_of(t)
-            frm = (t.get("from") or "").lower()
-            to = (t.get("to") or "").lower()
-            key = (h, tid, frm, to)
-            if key in seen:
-                continue
-            seen.add(key)
-            ts = (t.get("metadata") or {}).get("blockTimestamp", "")
-            price = order_price_for_token(orders, contract, tid) if tid is not None else None
-            if frm == ZERO:
-                per = mint_native.get(h, 0.0) / max(mint_txs.get(h, 1), 1)
-                source = "MINT_FREE" if per == 0 else "MINT_PAID"
-                price = per
-            elif price is not None:
-                source = "SALE"
-            else:
-                source = "TRANSFER"
-                price = 0.0
-            rows.append({
-                "time": ts, "tokenId": tid, "from": frm, "to": to,
-                "tx": h, "source": source, "price": round(price, 6),
-            })
-        done += 1
-        if progress and done % 200 == 0:
-            print(f"  ...{done}/{len(by_hash)} tx, rpc_calls={rpc.calls}", file=sys.stderr)
+    for t in transfers:
+        h = t["hash"]
+        tid = token_id_of(t)
+        frm = (t.get("from") or "").lower()
+        to = (t.get("to") or "").lower()
+        key = (h, tid, frm, to)
+        if key in seen:
+            continue
+        seen.add(key)
+        ts = (t.get("metadata") or {}).get("blockTimestamp", "")
+        price = order_price_for_token(orders_by.get(h, []), contract, tid) if tid is not None else None
+        if frm == ZERO:
+            per = mint_native.get(h, 0.0) / max(mint_txs.get(h, 1), 1)
+            source = "MINT_FREE" if per == 0 else "MINT_PAID"
+            price = per
+        elif price is not None:
+            source = "SALE"
+        else:
+            source = "TRANSFER"
+            price = 0.0
+        rows.append({
+            "time": ts, "tokenId": tid, "from": frm, "to": to,
+            "tx": h, "source": source, "price": round(price, 6),
+        })
 
     rows.sort(key=lambda r: r["time"])
     return rows
