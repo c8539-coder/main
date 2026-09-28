@@ -136,10 +136,14 @@ def classify_movements(rpc: Rpc, contract: str, progress=True) -> list:
             mint_txs[t["hash"]] += 1
     mint_native = fetch_tx_values(rpc, list(mint_txs)) if mint_txs else {}
 
-    # receipt'ы для ВСЕХ уникальных tx (батчем) -> Seaport-ордера
-    uniq = list({t["hash"] for t in transfers})
+    # receipt'ы нужны только для tx с НЕ-минт трансфером (у чистых минтов Seaport-ордеров нет)
+    mint_only = set(mint_txs)
+    for t in transfers:
+        if (t.get("from") or "").lower() != ZERO:
+            mint_only.discard(t["hash"])
+    uniq = list({t["hash"] for t in transfers} - mint_only)
     if progress:
-        print(f"уникальных tx: {len(uniq)} — тяну receipt'ы батчами по 100", file=sys.stderr)
+        print(f"tx с возможной сделкой: {len(uniq)} (минт-only пропущено: {len(mint_only)})", file=sys.stderr)
     orders_by = fetch_receipts_orders(rpc, uniq, progress=progress)
 
     rows = []
