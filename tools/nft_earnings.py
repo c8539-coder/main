@@ -145,8 +145,19 @@ def decode_order_fulfilled(data: str):
     return offer, con
 
 
+# ETH-only режим: нативный ETH (itemType 0) + WETH этого чейна (itemType 1).
+# Сделки в других ERC20 (USDG-стейбл и т.п.) не считаем ETH-флипом -> их цена 0.
+WETH = "0x0bd7d308f8e1639fab988df18a8011f41eacad73"
+
+
 def _currency_sum(items) -> float:
-    return sum(it[3] for it in items if it[0] in (0, 1)) / 1e18
+    total = 0
+    for it in items:
+        if it[0] == 0:                       # native ETH
+            total += it[3]
+        elif it[0] == 1 and it[1].lower() == WETH:  # только WETH, не прочие токены
+            total += it[3]
+    return total / 1e18
 
 
 def order_price_for_token(orders, contract: str, token_id: int):

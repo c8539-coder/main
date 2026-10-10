@@ -164,9 +164,9 @@ def classify_movements(rpc: Rpc, contract: str, progress=True, from_block=0) -> 
             per = mint_native.get(h, 0.0) / max(mint_txs.get(h, 1), 1)
             source = "MINT_FREE" if per == 0 else "MINT_PAID"
             price = per
-        elif price is not None:
+        elif price:                      # ETH-цена > 0 (нативный ETH/WETH) -> ETH-сделка
             source = "SALE"
-        else:
+        else:                            # перевод, либо сделка в НЕ-ETH токене (USDG и т.п.)
             source = "TRANSFER"
             price = 0.0
         rows.append({
