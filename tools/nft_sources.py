@@ -84,9 +84,9 @@ def fetch_tx_values(rpc: Rpc, hashes: list, size=25, sleep=0.0, progress=True) -
     return {h: (int((rc or {}).get("value", "0x0"), 16) / 1e18) for h, rc in raw.items()}
 
 
-def fetch_all_transfers(rpc: Rpc, contract: str) -> list:
+def fetch_all_transfers(rpc: Rpc, contract: str, from_block=0) -> list:
     base = {
-        "fromBlock": "0x0", "toBlock": "latest",
+        "fromBlock": hex(from_block), "toBlock": "latest",
         "category": ["erc721", "erc1155"], "contractAddresses": [contract],
         "withMetadata": True, "excludeZeroValue": False, "maxCount": "0x3e8",
     }
@@ -121,11 +121,12 @@ def orders_of_tx(rpc: Rpc, tx_hash: str, cache: dict) -> list:
 MOVEMENT_COLS = ["time", "tokenId", "from", "to", "tx", "source", "price"]
 
 
-def classify_movements(rpc: Rpc, contract: str, progress=True) -> list:
+def classify_movements(rpc: Rpc, contract: str, progress=True, from_block=0) -> list:
     """Тяжёлый проход (один раз на коллекцию): все трансферы + Seaport-разбор +
-    цены минтов -> список movement-строк с колонкой source."""
+    цены минтов -> список movement-строк с колонкой source.
+    from_block>0 — оконный режим (только недавние блоки, дёшево по квоте)."""
     contract = contract.lower()
-    transfers = fetch_all_transfers(rpc, contract)
+    transfers = fetch_all_transfers(rpc, contract, from_block=from_block)
     if progress:
         print(f"NFT-трансферов: {len(transfers)}", file=sys.stderr)
 
