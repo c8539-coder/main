@@ -1,0 +1,404 @@
+<title>Profit Checker</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: Windows 98 desktop — teal ground, one centered dialog window, bottom taskbar.
+   Single deliberate retro theme (no dark mode); every color explicit. */
+:root{
+  --desktop:#008080; --face:#c0c0c0; --face-text:#000; --white:#fff; --black:#0a0a0a;
+  --shadow:#808080; --light:#dfdfdf; --title1:#000080; --title2:#1084d0; --title-text:#fff;
+  --sunken:#fff; --profit:#008000; --loss:#c00000; --disabled:#808080;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; background:var(--desktop); color:var(--face-text);
+  font-family:"MS Sans Serif","Pixelated MS Sans Serif",Tahoma,Geneva,Verdana,sans-serif;
+  font-size:12px; -webkit-font-smoothing:none;
+  display:flex; align-items:flex-start; justify-content:center;
+  padding:28px max(16px,env(safe-area-inset-left,0px)) 56px max(16px,env(safe-area-inset-right,0px));
+  overflow-x:hidden;
+}
+/* desktop icons (decorative) */
+.desk{position:fixed; top:10px; left:10px; display:flex; flex-direction:column; gap:18px; z-index:0}
+.desk .ico{width:72px; text-align:center; color:#fff; font-size:11px; text-shadow:1px 1px 1px #004}
+.desk .ico .glyph{font-size:28px; display:block; line-height:1}
+@media (max-width:560px){ .desk{display:none} }
+
+/* 98 bevels */
+.raised{box-shadow:inset -1px -1px 0 var(--black), inset 1px 1px 0 var(--white), inset -2px -2px 0 var(--shadow), inset 2px 2px 0 var(--light)}
+.sunken{box-shadow:inset -1px -1px 0 var(--white), inset 1px 1px 0 var(--black), inset -2px -2px 0 var(--light), inset 2px 2px 0 var(--shadow)}
+
+.win{position:relative; z-index:1; width:100%; max-width:540px; background:var(--face); padding:3px;
+  box-shadow:inset -1px -1px 0 var(--black), inset 1px 1px 0 var(--white), inset -2px -2px 0 var(--shadow), inset 2px 2px 0 var(--light)}
+.title-bar{height:22px; background:linear-gradient(90deg,var(--title1),var(--title2)); color:var(--title-text);
+  display:flex; align-items:center; gap:6px; padding:0 3px; font-weight:bold; user-select:none}
+.title-bar .t{flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.tb-btns{display:flex; gap:2px}
+.tb-btn{width:16px; height:14px; background:var(--face); color:#000; font-size:9px; font-weight:bold;
+  display:flex; align-items:center; justify-content:center; line-height:1;
+  box-shadow:inset -1px -1px 0 var(--black), inset 1px 1px 0 var(--white), inset -2px -2px 0 var(--shadow), inset 2px 2px 0 var(--light)}
+.win-body{padding:12px}
+
+.row{display:flex; gap:6px; align-items:center; flex-wrap:wrap}
+label.lbl{font-size:12px}
+input[type=text]{flex:1 1 200px; min-width:0; height:21px; padding:2px 4px; border:none; background:var(--sunken);
+  font-family:inherit; font-size:12px; color:#000;
+  box-shadow:inset -1px -1px 0 var(--white), inset 1px 1px 0 var(--black), inset -2px -2px 0 var(--light), inset 2px 2px 0 var(--shadow)}
+input[type=text]:focus{outline:1px dotted #000; outline-offset:-3px}
+button.btn{min-width:84px; height:23px; padding:2px 10px; background:var(--face); color:#000; border:none;
+  font-family:inherit; font-size:12px; cursor:pointer;
+  box-shadow:inset -1px -1px 0 var(--black), inset 1px 1px 0 var(--white), inset -2px -2px 0 var(--shadow), inset 2px 2px 0 var(--light)}
+button.btn:active{box-shadow:inset 1px 1px 0 var(--black), inset -1px -1px 0 var(--white), inset 2px 2px 0 var(--shadow), inset -2px -2px 0 var(--light)}
+button.btn:focus{outline:1px dotted #000; outline-offset:-4px}
+button.btn:disabled{color:var(--disabled); text-shadow:1px 1px 0 var(--white); cursor:default}
+
+.hint{margin-top:10px; font-size:11px; color:#333}
+.linklike{color:var(--title1); text-decoration:underline; cursor:pointer}
+
+/* group box (fieldset) */
+.group{margin-top:12px; border:none; padding:12px 12px 14px; position:relative;
+  box-shadow:inset -1px -1px 0 var(--white), inset 1px 1px 0 var(--shadow)}
+.group>.legend{position:absolute; top:-8px; left:8px; background:var(--face); padding:0 4px; font-size:11px}
+
+.bignum{font-size:26px; font-weight:bold; line-height:1.1; margin:2px 0 8px; font-variant-numeric:tabular-nums}
+.pos{color:var(--profit)} .neg{color:var(--loss)}
+.sub{font-size:11px; color:#222; margin-bottom:10px}
+
+table.stats{width:100%; border-collapse:collapse; font-size:12px; font-variant-numeric:tabular-nums}
+table.stats td{padding:2px 6px}
+table.stats td.k{color:#222} table.stats td.v{text-align:right; font-weight:bold}
+.flips{margin-top:10px; max-height:168px; overflow:auto; background:var(--sunken); padding:4px;
+  box-shadow:inset -1px -1px 0 var(--white), inset 1px 1px 0 var(--black), inset -2px -2px 0 var(--light), inset 2px 2px 0 var(--shadow)}
+.flips table{width:100%; border-collapse:collapse; font-size:11px; font-variant-numeric:tabular-nums}
+.flips th{text-align:left; border-bottom:1px solid var(--shadow); padding:2px 4px; position:sticky; top:0; background:var(--sunken)}
+.flips td{padding:2px 4px; white-space:nowrap}
+.flips td.m{text-align:right; font-weight:bold}
+
+/* loading modal — the "Uploading" dialog */
+.overlay{position:fixed; inset:0; background:rgba(0,0,0,.25); display:flex; align-items:center; justify-content:center;
+  padding:16px; z-index:50}
+.dlg{width:100%; max-width:420px; background:var(--face); padding:3px;
+  box-shadow:inset -1px -1px 0 var(--black), inset 1px 1px 0 var(--white), inset -2px -2px 0 var(--shadow), inset 2px 2px 0 var(--light)}
+.dlg .title-bar .t{font-size:12px}
+.dlg-body{padding:16px 16px 14px}
+.dlg-top{display:flex; gap:14px; align-items:center}
+.dlg-top .msg{font-size:18px}
+.monitor{flex:0 0 auto}
+.pbar{margin-top:14px; height:20px; background:var(--white); padding:2px;
+  box-shadow:inset -1px -1px 0 var(--white), inset 1px 1px 0 var(--black), inset -2px -2px 0 var(--light), inset 2px 2px 0 var(--shadow);
+  display:flex; gap:2px; overflow:hidden}
+.pbar i{flex:0 0 14px; background:var(--title1); display:none}
+.pbar i.on{display:block}
+.dlg-actions{margin-top:16px; display:flex; gap:10px; justify-content:center}
+.status{margin-top:8px; font-size:11px; color:#222; text-align:center}
+
+/* settings panel */
+.settings{margin-top:10px; display:none}
+.settings.open{display:block}
+.settings textarea{width:100%; height:44px; font-family:inherit; font-size:11px; resize:vertical; border:none; background:var(--sunken); padding:3px;
+  box-shadow:inset -1px -1px 0 var(--white), inset 1px 1px 0 var(--black), inset -2px -2px 0 var(--light), inset 2px 2px 0 var(--shadow)}
+
+/* taskbar */
+.taskbar{position:fixed; left:0; right:0; bottom:0; height:30px; background:var(--face); display:flex; align-items:center;
+  gap:6px; padding:2px 4px; z-index:40;
+  box-shadow:inset 0 1px 0 var(--white), inset 0 2px 0 var(--light)}
+.start{display:flex; align-items:center; gap:5px; font-weight:bold; font-size:12px; height:24px; padding:0 8px;
+  box-shadow:inset -1px -1px 0 var(--black), inset 1px 1px 0 var(--white), inset -2px -2px 0 var(--shadow), inset 2px 2px 0 var(--light)}
+.start .flag{font-size:14px}
+.task-win{flex:1 1 auto; max-width:200px; height:24px; display:flex; align-items:center; gap:6px; padding:0 8px; font-size:11px;
+  box-shadow:inset 1px 1px 0 var(--black), inset -1px -1px 0 var(--white), inset 2px 2px 0 var(--shadow), inset -2px -2px 0 var(--light)}
+.tray{margin-left:auto; height:24px; display:flex; align-items:center; padding:0 10px; font-size:11px; font-variant-numeric:tabular-nums;
+  box-shadow:inset -1px -1px 0 var(--white), inset 1px 1px 0 var(--shadow)}
+[hidden]{display:none!important}
+</style>
+
+<div class="desk">
+  <div class="ico"><span class="glyph">🖥️</span>My Computer</div>
+  <div class="ico"><span class="glyph">🗑️</span>Recycle Bin</div>
+  <div class="ico"><span class="glyph">💾</span>My Wallets</div>
+</div>
+
+<div class="win">
+  <div class="title-bar">
+    <span class="t">💰 Profit Checker — Robinhood</span>
+    <span class="tb-btns">
+      <span class="tb-btn">_</span><span class="tb-btn">▢</span><span class="tb-btn">✕</span>
+    </span>
+  </div>
+  <div class="win-body">
+    <div class="row">
+      <label class="lbl" for="addr">Wallet:</label>
+      <input type="text" id="addr" placeholder="0x4dfc…2c94" autocomplete="off" spellcheck="false">
+      <button class="btn" id="go">Check Profit</button>
+    </div>
+    <div class="hint">
+      Введи адрес кошелька → чистый профит по сделкам на Robinhood-чейне.
+      <span class="linklike" id="setToggle">Настройки</span>
+    </div>
+
+    <div class="settings" id="settings">
+      <div class="group" style="margin-top:6px">
+        <span class="legend">Alchemy RPC (robinhood-mainnet)</span>
+        <textarea id="rpcUrl" spellcheck="false"></textarea>
+        <div class="row" style="margin-top:6px; justify-content:flex-end">
+          <button class="btn" id="saveRpc">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="group" id="result" hidden>
+      <span class="legend">Result</span>
+      <div class="bignum" id="net">—</div>
+      <div class="sub" id="netsub"></div>
+      <table class="stats" id="stats"></table>
+      <div class="flips" id="flipsBox" hidden>
+        <table><thead><tr><th>Token</th><th>Buy</th><th>Sell</th><th style="text-align:right">PnL</th></tr></thead>
+        <tbody id="flipsBody"></tbody></table>
+      </div>
+    </div>
+
+    <div class="group" id="emptyState">
+      <span class="legend">Result</span>
+      <div class="sub" style="margin:2px 0 0">Пример: <b>0x4dfcecfacad1c725dffff34bd61aabbf6db12c94</b> → +0.0037 ETH (3 продажи). Введи свой адрес и жми «Check Profit».</div>
+    </div>
+  </div>
+</div>
+
+<!-- loading dialog -->
+<div class="overlay" id="overlay" hidden>
+  <div class="dlg">
+    <div class="title-bar">
+      <span class="t" id="dlgTitle">Scanning wallet…</span>
+      <span class="tb-btns"><span class="tb-btn" id="dlgX">✕</span></span>
+    </div>
+    <div class="dlg-body">
+      <div class="dlg-top">
+        <svg class="monitor" width="56" height="52" viewBox="0 0 56 52" shape-rendering="crispEdges" aria-hidden="true">
+          <rect x="4" y="2" width="44" height="34" fill="#c0c0c0" stroke="#000"/>
+          <rect x="8" y="6" width="36" height="26" fill="#000080"/>
+          <rect x="12" y="10" width="10" height="2" fill="#00ff00"/>
+          <rect x="12" y="15" width="22" height="2" fill="#fff"/>
+          <rect x="12" y="20" width="16" height="2" fill="#fff"/>
+          <rect x="20" y="36" width="12" height="6" fill="#c0c0c0" stroke="#000"/>
+          <rect x="10" y="42" width="34" height="6" fill="#c0c0c0" stroke="#000"/>
+          <rect x="47" y="30" width="5" height="5" fill="#00c000" stroke="#000"/>
+        </svg>
+        <div class="msg" id="dlgMsg">Scanning blockchain</div>
+      </div>
+      <div class="pbar" id="pbar"></div>
+      <div class="status" id="dlgStatus">Подключаюсь к Alchemy…</div>
+      <div class="dlg-actions">
+        <button class="btn" id="cancelBtn">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="taskbar">
+  <div class="start raised"><span class="flag">🪟</span>Start</div>
+  <div class="task-win">💰 Profit Checker</div>
+  <div class="tray raised" id="clock">--:--</div>
+</div>
+
+<script>
+"use strict";
+const DEFAULT_RPC = "https://robinhood-mainnet.g.alchemy.com/v2/alch_DIQ82lv-_n8L5zFqkk9Ih";
+const WETH = "0x0bd7d308f8e1639fab988df18a8011f41eacad73";
+const ZERO = "0x0000000000000000000000000000000000000000";
+const ORDER_FULFILLED = "0x9d9af8e38d66c62e2c12f0225249fd9d721c54b83f48d9352c97c6cacdcb6f31";
+const FEE = 0.02; // оценка комиссий маркета+роялти
+
+function getRpc(){ try{ return localStorage.getItem("rh_rpc") || DEFAULT_RPC; }catch(e){ return DEFAULT_RPC; } }
+const $ = id => document.getElementById(id);
+
+// ---- clock ----
+function tick(){ const d=new Date(); let h=d.getHours(), m=d.getMinutes(); const ap=h<12?"AM":"PM"; h=h%12||12;
+  $("clock").textContent = h+":"+String(m).padStart(2,"0")+" "+ap; }
+tick(); setInterval(tick,1000);
+
+// ---- settings ----
+$("rpcUrl").value = getRpc();
+$("setToggle").onclick = ()=> $("settings").classList.toggle("open");
+$("saveRpc").onclick = ()=>{ try{ localStorage.setItem("rh_rpc", $("rpcUrl").value.trim()); }catch(e){}
+  $("settings").classList.remove("open"); };
+
+// ---- rpc helpers ----
+let cancelled = false;
+async function rpc(method, params){
+  const r = await fetch(getRpc(), {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({jsonrpc:"2.0", id:1, method, params})});
+  const j = await r.json();
+  if(j.error) throw new Error(j.error.message || "rpc error");
+  return j.result;
+}
+async function rpcBatch(calls){
+  const payload = calls.map((c,i)=>({jsonrpc:"2.0", id:i, method:c[0], params:c[1]}));
+  const r = await fetch(getRpc(), {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(payload)});
+  const arr = await r.json();
+  const out = {};
+  if(Array.isArray(arr)) for(const it of arr) out[it.id] = it.result;
+  return out;
+}
+async function getTransfers(key, wallet){
+  const base = {fromBlock:"0x0", toBlock:"latest", category:["erc721","erc1155"],
+    withMetadata:true, excludeZeroValue:false, maxCount:"0x3e8"};
+  base[key] = wallet;
+  let out=[], pk=null;
+  do{
+    const p = Object.assign({}, base); if(pk) p.pageKey=pk;
+    const res = await rpc("alchemy_getAssetTransfers", [p]);
+    out = out.concat(res.transfers||[]); pk = res.pageKey;
+    if(cancelled) throw new Error("cancelled");
+  } while(pk);
+  return out;
+}
+
+// ---- Seaport decode ----
+function words(data){ const h=data.startsWith("0x")?data.slice(2):data; const w=[];
+  for(let i=0;i<h.length;i+=64) w.push(h.slice(i,i+64)); return w; }
+function decodeOrder(data){
+  const w = words(data); const num = x => Number(BigInt("0x"+w[x]));
+  const offOff = num(2)/32, conOff = num(3)/32;
+  const offer=[], con=[];
+  const nOff = num(offOff);
+  for(let k=0;k<nOff;k++){ const b=offOff+1+k*4;
+    offer.push([num(b), "0x"+w[b+1].slice(24), BigInt("0x"+w[b+2]), BigInt("0x"+w[b+3])]); }
+  const nCon = num(conOff);
+  for(let k=0;k<nCon;k++){ const b=conOff+1+k*5;
+    con.push([num(b), "0x"+w[b+1].slice(24), BigInt("0x"+w[b+2]), BigInt("0x"+w[b+3])]); }
+  return [offer, con];
+}
+function currencySum(items){
+  let t = 0n;
+  for(const it of items){ if(it[0]===0 || (it[0]===1 && it[1].toLowerCase()===WETH)) t += it[3]; }
+  return Number(t)/1e18;
+}
+function orderPrice(orders, contract, tokenId){
+  for(const [offer,con] of orders){
+    const ids = [];
+    for(const x of offer) if((x[0]===2||x[0]===3) && x[1].toLowerCase()===contract) ids.push(x[2]);
+    for(const x of con)   if((x[0]===2||x[0]===3) && x[1].toLowerCase()===contract) ids.push(x[2]);
+    if(ids.some(v=> v===tokenId)) return Math.max(currencySum(offer), currencySum(con));
+  }
+  return null;
+}
+function ordersFromReceipt(rc){
+  const out=[]; if(!rc||!rc.logs) return out;
+  for(const lg of rc.logs){ const tp=lg.topics||[];
+    if(tp[0] && tp[0].toLowerCase()===ORDER_FULFILLED){ try{ out.push(decodeOrder(lg.data)); }catch(e){} } }
+  return out;
+}
+
+// ---- progress bar ----
+function setBlocks(n){ const bar=$("pbar"); bar.innerHTML="";
+  for(let i=0;i<30;i++){ const b=document.createElement("i"); if(i<n) b.className="on"; bar.appendChild(b); } }
+function progress(frac, msg){ setBlocks(Math.round(frac*30)); if(msg) $("dlgStatus").textContent=msg; }
+
+// ---- receipts with null-retry ----
+async function fetchReceipts(hashes){
+  const out={}; let pending=hashes.slice(); let round=0;
+  while(pending.length && round<6){
+    round++; const nulls=[];
+    for(let i=0;i<pending.length;i+=25){
+      const chunk = pending.slice(i,i+25);
+      const res = await rpcBatch(chunk.map(h=>["eth_getTransactionReceipt",[h]]));
+      chunk.forEach((h,j)=>{ const rc=res[j];
+        if(rc && (rc.transactionHash||"").toLowerCase()===h.toLowerCase()) out[h]=ordersFromReceipt(rc);
+        else nulls.push(h); });
+      progress(0.1 + 0.85*(Object.keys(out).length/hashes.length), "Читаю сделки… "+Object.keys(out).length+"/"+hashes.length);
+      if(cancelled) throw new Error("cancelled");
+    }
+    pending = nulls; if(pending.length) await new Promise(r=>setTimeout(r, 400*round));
+  }
+  for(const h of pending) out[h]=[];
+  return out;
+}
+
+// ---- main ----
+const toId = v => BigInt(v);
+function tokenIdOf(t){ const raw = t.tokenId || t.erc721TokenId || (t.erc1155Metadata&&t.erc1155Metadata[0]&&t.erc1155Metadata[0].tokenId); return raw? BigInt(raw): null; }
+function contractOf(t){ return ((t.rawContract&&t.rawContract.address)||"").toLowerCase(); }
+
+async function run(){
+  const wallet = $("addr").value.trim().toLowerCase();
+  if(!/^0x[0-9a-fA-F]{40}$/.test(wallet)){ alertWin("Неверный адрес","Введи корректный 0x-адрес (40 hex-символов)."); return; }
+  cancelled=false; $("overlay").hidden=false; $("go").disabled=true; $("dlgMsg").textContent="Scanning blockchain"; setBlocks(1);
+  $("dlgTitle").textContent = wallet.slice(0,10)+"…"+wallet.slice(-4);
+  try{
+    progress(0.04, "Тяну трансферы…");
+    const nin = await getTransfers("toAddress", wallet);
+    const nout = await getTransfers("fromAddress", wallet);
+    const hashes = Array.from(new Set(nin.concat(nout).map(t=>t.hash)));
+    if(hashes.length===0){ showResult({empty:true}); return; }
+    progress(0.1, "Читаю сделки…");
+    const orders = await fetchReceipts(hashes);
+
+    // acquisitions: first buy/mint price per (contract,token)
+    const all = nin.map(t=>({t,dir:"in"})).concat(nout.map(t=>({t,dir:"out"})));
+    all.sort((a,b)=> parseInt(a.t.blockNum,16)-parseInt(b.t.blockNum,16));
+    const acqPrice = new Map(); // key -> buy price
+    const sells = []; // {key, token, sell, buy, time}
+    for(const {t,dir} of all){
+      const c = contractOf(t), id = tokenIdOf(t); if(id===null) continue;
+      const key = c+"#"+id.toString();
+      const pr = orderPrice(orders[t.hash]||[], c, id);
+      if(dir==="in"){
+        if(!acqPrice.has(key)) acqPrice.set(key, pr||0);
+      } else {
+        if(pr && pr>0){
+          const buy = acqPrice.has(key)? acqPrice.get(key) : 0;
+          sells.push({key, token:id.toString(), sell:pr, buy, time:(t.metadata&&t.metadata.blockTimestamp||"").slice(0,10)});
+        }
+      }
+    }
+    showResult({nin, nout, sells, held: nin.length-nout.length});
+  }catch(e){
+    if(String(e.message)!=="cancelled") alertWin("Ошибка", String(e.message||e));
+    closeOverlay();
+  }
+}
+
+function showResult(d){
+  progress(1, "Готово");
+  setTimeout(()=>{ closeOverlay();
+    $("emptyState").hidden=true; $("result").hidden=false;
+    if(d.empty){ $("net").textContent="— ETH"; $("net").className="bignum";
+      $("netsub").textContent="Сделок на Robinhood не найдено."; $("stats").innerHTML=""; $("flipsBox").hidden=true; return; }
+    const grossSales = d.sells.reduce((s,x)=>s+x.sell,0);
+    const grossMargin = d.sells.reduce((s,x)=>s+(x.sell-x.buy),0);
+    const fees = grossSales*FEE;
+    const net = grossMargin - fees;
+    const el=$("net"); el.textContent=(net>=0?"+":"")+net.toFixed(4)+" ETH"; el.className="bignum "+(net>=0?"pos":"neg");
+    $("netsub").textContent = d.sells.length+" продаж · куплено "+d.nin.length+" · держит "+d.held;
+    $("stats").innerHTML =
+      row("Продажи (gross)", grossSales.toFixed(4)+" ETH")+
+      row("Маржа (gross)", (grossMargin>=0?"+":"")+grossMargin.toFixed(4)+" ETH")+
+      row("Комиссии ~"+(FEE*100)+"%", "−"+fees.toFixed(4)+" ETH")+
+      row("ЧИСТЫЙ ПРОФИТ", (net>=0?"+":"")+net.toFixed(4)+" ETH");
+    const body=$("flipsBody"); body.innerHTML="";
+    if(d.sells.length){ $("flipsBox").hidden=false;
+      d.sells.slice().sort((a,b)=>(b.sell-b.buy)-(a.sell-a.buy)).forEach(x=>{
+        const m=x.sell-x.buy; const tr=document.createElement("tr");
+        tr.innerHTML = "<td>#"+x.token+"</td><td>"+x.buy.toFixed(4)+"</td><td>"+x.sell.toFixed(4)+
+          "</td><td class='m' style='color:"+(m>=0?"#008000":"#c00000")+"'>"+(m>=0?"+":"")+m.toFixed(4)+"</td>";
+        body.appendChild(tr); });
+    } else $("flipsBox").hidden=true;
+  }, 300);
+}
+function row(k,v){ return "<tr><td class='k'>"+k+"</td><td class='v'>"+v+"</td></tr>"; }
+
+function closeOverlay(){ $("overlay").hidden=true; $("go").disabled=false; }
+function alertWin(title,msg){ // tiny 98-style alert via overlay reuse
+  closeOverlay(); $("dlgTitle").textContent=title; $("dlgMsg").textContent=msg; $("dlgStatus").textContent="";
+  setBlocks(0); $("overlay").hidden=false;
+  $("cancelBtn").textContent="OK";
+  $("cancelBtn").onclick = ()=>{ $("cancelBtn").textContent="Cancel"; $("cancelBtn").onclick=onCancel; closeOverlay(); };
+}
+function onCancel(){ cancelled=true; closeOverlay(); }
+
+$("cancelBtn").onclick = onCancel;
+$("dlgX").onclick = onCancel;
+$("go").onclick = run;
+$("addr").addEventListener("keydown", e=>{ if(e.key==="Enter") run(); });
+</script>
