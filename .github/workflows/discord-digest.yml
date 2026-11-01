@@ -1,0 +1,25 @@
+name: Discord daily digest
+
+on:
+  schedule:
+    - cron: "0 20 * * *"   # каждый день в 20:00 UTC (поменяй под себя)
+  workflow_dispatch: {}      # кнопка "Run" для ручного запуска/теста
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "anthropic>=0.40,<1"
+      - name: Build and send digest
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MODEL: ${{ vars.DIGEST_MODEL || 'claude-opus-5-5' }}
+          HOURS: "24"
+        run: python digest/discord_digest.py
